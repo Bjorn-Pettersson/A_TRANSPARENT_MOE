@@ -1,0 +1,9 @@
+Find HF cashing folder: C:\Users\bjorn\.cache\huggingface\datasets, maybe new: D:\hf_cache
+For the actual datasets .tar: C:\Users\bjorn\.cache\huggingface\hub
+
+
+4 GB - test run:
+    python train.py config/train_4gb_test.py
+
+run 6k run:
+python train.py config/bp_train_moe.py --device=cuda --out_dir='out-moe-6k'

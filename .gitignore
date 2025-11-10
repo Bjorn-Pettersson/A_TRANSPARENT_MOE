@@ -6,9 +6,13 @@ __pycache__/
 # --- Global Binary Ignore Rule ---
 # Ignore ALL files ending in .bin, regardless of location
 *.bin
+*.pt
 
 # --- Ignored Content Specific to the Imported Subfolder ---
 # Assuming the imported folder is at 'path/to/subrepo'
 .ipynb_checkpoints/
 path/to/subrepo/data/shakespeare/input.txt
 path/to/subrepo/out*
+
+# WandB logs and temporary files (critical to ignore)
+nanoGPT-LoRA/wandb/
