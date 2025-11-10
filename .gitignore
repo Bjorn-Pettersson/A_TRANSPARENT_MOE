@@ -1,0 +1,14 @@
+# --- General Ignored Files (Applies everywhere) ---
+.DS_Store
+__pycache__/
+*.pyc
+
+# --- Global Binary Ignore Rule ---
+# Ignore ALL files ending in .bin, regardless of location
+*.bin
+
+# --- Ignored Content Specific to the Imported Subfolder ---
+# Assuming the imported folder is at 'path/to/subrepo'
+.ipynb_checkpoints/
+path/to/subrepo/data/shakespeare/input.txt
+path/to/subrepo/out*

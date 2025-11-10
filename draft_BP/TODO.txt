@@ -1,0 +1,9 @@
+Get data
+-MMLU
+-MATH
+-WebText
+Figure out scaled down architecture based on paper 16GB
+Set up a base experiment
+
+Logging
+-Set up good metrics and datacollection in weights and biases based on our goal
