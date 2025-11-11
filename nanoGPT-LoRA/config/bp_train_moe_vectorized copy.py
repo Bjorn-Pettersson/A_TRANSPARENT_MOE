@@ -58,11 +58,6 @@ eval_interval = 200
 eval_iters = 20
 log_interval = 1
 
-# Diagram-only plotting cadence (iterations). This only affects logging the
-# multi-layer routing figure and does NOT change evaluation/checkpointing.
-# Setting to 1 to start as requested.
-plot_interval = 1
-
 # ------------------------------
 # System
 # ------------------------------

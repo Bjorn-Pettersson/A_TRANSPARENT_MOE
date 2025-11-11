@@ -26,6 +26,10 @@ import numpy as np
 import torch
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
+import matplotlib
+# use non-interactive backend for headless logging
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 
 from model import GPTConfig, GPT, get_lora_model
 
@@ -60,6 +64,11 @@ ffn_mult = 4.0 # default FFN expansion factor; can be reduced in configs
 n_expert = 0
 n_routed_expert = 1
 load_balancing_lambda = 0.01
+
+# How often to update the routing diagram (in iterations). This only affects
+# logging of the multi-layer diagram and does NOT change evaluation/checkpointing.
+# Can be overridden from config files; default 1 (every iter) as requested.
+plot_interval = 1
 
 # LoRA params
 lora_rank = 0
@@ -301,6 +310,28 @@ try:
         wandb_routing_table = wandb.Table(columns=routing_columns)
         # Log once immediately so the table schema appears in the UI
         wandb.log({"routing/scatter_table": wandb_routing_table})
+        # Prepare a history buffer to accumulate routing frequencies per layer/expert
+        # Attach it to the underlying model object (handles DDP wrapper if present)
+        try:
+            target_model = model.module if isinstance(model, DDP) else model
+            n_layer = int(getattr(target_model.config, 'n_layer', 12))
+            n_expert = int(getattr(target_model.config, 'n_expert', 0))
+        except Exception:
+            # fallback defaults
+            n_layer = 12
+            n_expert = 0
+
+        # routing history: { layer_idx: { 'iters': [...], 'freqs': { expert_idx: [...] } } }
+        routing_history = {
+            li: {'iters': [], 'freqs': {ei: [] for ei in range(max(1, n_expert))}}
+            for li in range(n_layer)
+        }
+        # attach so later code (which uses raw_model) can access it via the underlying module
+        try:
+            target_model._wandb_routing_history = routing_history
+        except Exception:
+            # best-effort: if we can't attach, keep in global
+            _wandb_routing_history = routing_history
 
 except Exception as e:
     # Print the specific error and its full traceback
@@ -420,27 +451,28 @@ while True:
         print(f"iter {iter_num}: LM_loss {main_lossf:.4f}, AUX_loss {aux_lossf:.4f}, TOTAL_loss {total_lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
 
         if wandb_log:
-            # Collect per-layer expert routing frequencies (like Fig. 6):
-            moe_log = {}
+            # Collect per-layer routing frequencies and append to our history buffer
             try:
-                # Prefer model-exposed latest_routing (computed in forward), if present
+                # access routing history attached to the model (set up at init time)
+                target_hist = getattr(raw_model, '_wandb_routing_history', None)
+                # prefer the model-exposed latest_routing if present
                 latest = getattr(raw_model, 'latest_routing', None)
                 handled = False
-                if latest is not None and 'layer_expert_freq' in latest:
+                if latest is not None and 'layer_expert_freq' in latest and target_hist is not None:
                     layer_freqs = latest['layer_expert_freq']
                     for li, freqs in enumerate(layer_freqs):
                         if freqs is None:
                             continue
-                        # Ensure on CPU and as list for logging
                         fcpu = freqs.detach().to('cpu')
+                        # append iteration and per-expert values
+                        target_hist[li]['iters'].append(iter_num)
                         for ei, val in enumerate(fcpu.tolist()):
-                            moe_log[f"moe/l{li:02d}/expert_{ei}_freq"] = float(val)
-                        moe_log[f"moe/l{li:02d}/active_experts"] = int((fcpu > 0).sum().item())
+                            target_hist[li]['freqs'].setdefault(ei, []).append(float(val))
                     handled = True
 
-                # Fallback: compute from submodules' last_selected_experts if available
-                if not handled and hasattr(raw_model, 'transformer'):
-                    n_exp = getattr(raw_model.config, 'n_expert', 0)
+                # fallback: build from last_selected_experts inside blocks
+                if not handled and hasattr(raw_model, 'transformer') and target_hist is not None:
+                    n_exp = int(getattr(raw_model.config, 'n_expert', 0))
                     if n_exp and n_exp > 0:
                         for li, block in enumerate(raw_model.transformer.h):
                             mlp = getattr(block, 'mlp', None)
@@ -451,42 +483,69 @@ while True:
                             total = sel.numel() if sel.numel() > 0 else 1
                             freqs = counts.to(torch.float32) / float(total)
                             fcpu = freqs.detach().to('cpu')
+                            target_hist[li]['iters'].append(iter_num)
                             for ei, val in enumerate(fcpu.tolist()):
-                                moe_log[f"moe/l{li:02d}/expert_{ei}_freq"] = float(val)
-                            moe_log[f"moe/l{li:02d}/active_experts"] = int((fcpu > 0).sum().item())
-            except Exception as _:
-                # If any issue, skip MoE logging for this step
-                pass
+                                target_hist[li]['freqs'].setdefault(ei, []).append(float(val))
+            except Exception:
+                # best-effort: if anything fails, skip routing accumulation for this step
+                target_hist = None
 
+            # base log: only core training scalars (avoid logging per-expert scalars to reduce clutter)
             base_log = {
                 "iter": iter_num,
-                # Log the individual components of the loss for better monitoring
                 "train/LM_loss": main_lossf,
                 "train/AUX_loss": aux_lossf,
                 "train/TOTAL_loss": total_lossf,
                 "lr": lr,
-                "mfu": running_mfu*100, # convert to percentage
+                "mfu": running_mfu*100,
             }
-            base_log.update(moe_log)
-
-            # Populate scatter table rows (one row per (layer, expert))
-            if 'moe/l00/expert_0_freq' in moe_log:  # quick existence check
-                # Determine number of layers by scanning keys
-                # Keys formatted: moe/lXX/expert_{ei}_freq
-                layer_ids = sorted({k.split('/')[1] for k in moe_log.keys() if k.startswith('moe/l') and 'expert_' in k})
-                for lid in layer_ids:
-                    # collect experts
-                    prefix = f"moe/{lid}/expert_"
-                    for k,v in moe_log.items():
-                        if k.startswith(prefix) and k.endswith('_freq'):
-                            # expert index between prefix and _freq
-                            ei = int(k[len(prefix): -5])
-                            wandb_routing_table.add_data(iter_num, lid, ei, v)
-
             wandb.log(base_log)
-            # Also log the table periodically (not every iter to reduce overhead)
-            if iter_num % 50 == 0:
-                wandb.log({"routing/scatter_table": wandb_routing_table})
+
+            # Periodically render a single multi-panel figure (one subplot per layer) and log it.
+            try:
+                # render according to plot_interval (configurable); fallback to eval_interval
+                render_period = max(1, int(plot_interval)) if 'plot_interval' in globals() else max(1, int(eval_interval))
+                hist = getattr(raw_model, '_wandb_routing_history', None)
+                if hist is not None and (iter_num % render_period == 0):
+                    n_layers = len(hist)
+                    # determine number of experts from first layer
+                    first_layer = hist.get(0, None)
+                    n_experts = len(first_layer['freqs']) if first_layer is not None else 0
+
+                    ncols = 4
+                    nrows = (n_layers + ncols - 1) // ncols
+                    fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(4*ncols, 3*nrows), squeeze=False)
+                    for li in range(n_layers):
+                        r = li // ncols
+                        c = li % ncols
+                        ax = axes[r][c]
+                        iters = hist[li]['iters']
+                        if len(iters) == 0:
+                            ax.set_title(f"Layer {li}")
+                            ax.set_ylim(0, 1)
+                            ax.set_xlabel('iter')
+                            ax.set_ylabel('freq')
+                            continue
+                        for ei, vals in hist[li]['freqs'].items():
+                            ax.plot(iters, vals, marker='o', markersize=3, linewidth=1, label=f'E{ei}')
+                        ax.set_title(f"Layer {li}")
+                        ax.set_ylim(0, 1)
+                        ax.set_xlabel('iter')
+                        ax.set_ylabel('freq')
+                        if li == 0:
+                            ax.legend(loc='upper right', fontsize=7)
+                    # turn off unused axes
+                    for j in range(n_layers, nrows * ncols):
+                        r = j // ncols
+                        c = j % ncols
+                        axes[r][c].axis('off')
+                    plt.tight_layout()
+                    # log a single image that contains all layers (12 diagrams in the grid)
+                    wandb.log({"moe/routing_by_layer": wandb.Image(fig), "iter": iter_num})
+                    plt.close(fig)
+            except Exception:
+                # if plotting/logging fails, ignore to not interrupt training
+                pass
     iter_num += 1
     local_iter_num += 1
 
