@@ -296,6 +296,11 @@ try:
     if wandb_log and master_process:
         import wandb
         wandb.init(project=wandb_project, name=wandb_run_name, config=config)
+        # Create a routing table for Fig.6-style scatter (iter vs expert freq per layer/expert)
+        routing_columns = ["iter","layer","expert","freq"]
+        wandb_routing_table = wandb.Table(columns=routing_columns)
+        # Log once immediately so the table schema appears in the UI
+        wandb.log({"routing/scatter_table": wandb_routing_table})
 
 except Exception as e:
     # Print the specific error and its full traceback
@@ -415,7 +420,45 @@ while True:
         print(f"iter {iter_num}: LM_loss {main_lossf:.4f}, AUX_loss {aux_lossf:.4f}, TOTAL_loss {total_lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
 
         if wandb_log:
-            wandb.log({
+            # Collect per-layer expert routing frequencies (like Fig. 6):
+            moe_log = {}
+            try:
+                # Prefer model-exposed latest_routing (computed in forward), if present
+                latest = getattr(raw_model, 'latest_routing', None)
+                handled = False
+                if latest is not None and 'layer_expert_freq' in latest:
+                    layer_freqs = latest['layer_expert_freq']
+                    for li, freqs in enumerate(layer_freqs):
+                        if freqs is None:
+                            continue
+                        # Ensure on CPU and as list for logging
+                        fcpu = freqs.detach().to('cpu')
+                        for ei, val in enumerate(fcpu.tolist()):
+                            moe_log[f"moe/l{li:02d}/expert_{ei}_freq"] = float(val)
+                        moe_log[f"moe/l{li:02d}/active_experts"] = int((fcpu > 0).sum().item())
+                    handled = True
+
+                # Fallback: compute from submodules' last_selected_experts if available
+                if not handled and hasattr(raw_model, 'transformer'):
+                    n_exp = getattr(raw_model.config, 'n_expert', 0)
+                    if n_exp and n_exp > 0:
+                        for li, block in enumerate(raw_model.transformer.h):
+                            mlp = getattr(block, 'mlp', None)
+                            sel = getattr(mlp, 'last_selected_experts', None)
+                            if sel is None:
+                                continue
+                            counts = torch.bincount(sel.reshape(-1), minlength=n_exp)
+                            total = sel.numel() if sel.numel() > 0 else 1
+                            freqs = counts.to(torch.float32) / float(total)
+                            fcpu = freqs.detach().to('cpu')
+                            for ei, val in enumerate(fcpu.tolist()):
+                                moe_log[f"moe/l{li:02d}/expert_{ei}_freq"] = float(val)
+                            moe_log[f"moe/l{li:02d}/active_experts"] = int((fcpu > 0).sum().item())
+            except Exception as _:
+                # If any issue, skip MoE logging for this step
+                pass
+
+            base_log = {
                 "iter": iter_num,
                 # Log the individual components of the loss for better monitoring
                 "train/LM_loss": main_lossf,
@@ -423,7 +466,27 @@ while True:
                 "train/TOTAL_loss": total_lossf,
                 "lr": lr,
                 "mfu": running_mfu*100, # convert to percentage
-            })
+            }
+            base_log.update(moe_log)
+
+            # Populate scatter table rows (one row per (layer, expert))
+            if 'moe/l00/expert_0_freq' in moe_log:  # quick existence check
+                # Determine number of layers by scanning keys
+                # Keys formatted: moe/lXX/expert_{ei}_freq
+                layer_ids = sorted({k.split('/')[1] for k in moe_log.keys() if k.startswith('moe/l') and 'expert_' in k})
+                for lid in layer_ids:
+                    # collect experts
+                    prefix = f"moe/{lid}/expert_"
+                    for k,v in moe_log.items():
+                        if k.startswith(prefix) and k.endswith('_freq'):
+                            # expert index between prefix and _freq
+                            ei = int(k[len(prefix): -5])
+                            wandb_routing_table.add_data(iter_num, lid, ei, v)
+
+            wandb.log(base_log)
+            # Also log the table periodically (not every iter to reduce overhead)
+            if iter_num % 50 == 0:
+                wandb.log({"routing/scatter_table": wandb_routing_table})
     iter_num += 1
     local_iter_num += 1
 

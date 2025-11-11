@@ -245,14 +245,6 @@ class SequenceMoE(nn.Module):
 
             # 3) Top-K selection (keep in float32 for accuracy), then cast weights to model dtype
             weights_full, selected_experts = torch.topk(router_probs_full, self.top_k, dim=-1)  # (B, top_k)
-
-            # --- Logging hook: store latest routing decisions for external inspection ---
-            # We detach and move minimally (keep on same device; training loop will .cpu() if needed)
-            # Only store during training to avoid unnecessary memory use at eval time.
-            if self.training:
-                self.last_selected_experts = selected_experts.detach()
-                self.last_batch_size = B
-                self.last_top_k = self.top_k
             weights = weights_full.to(x.dtype)
             # Normalize across selected experts for each sequence
             weights = weights / (weights.sum(dim=-1, keepdim=True) + 1e-9)
@@ -407,37 +399,16 @@ class GPT(nn.Module):
         # Initialize total auxiliary loss (will remain zero if n_expert=0)
         total_aux_loss = torch.zeros(1, device=device)
         
-        # We will optionally collect routing stats (per-layer expert frequencies) during training
-        collected_freqs = []
         for block in self.transformer.h:
             # Conditional check for MoE: if the block is an MoE, it returns (output, aux_loss)
             if isinstance(block.mlp, SequenceMoE):
                 x, aux_loss = block(x) 
                 total_aux_loss += aux_loss
-                # Try to compute per-layer expert frequency from most recent routing if available
-                if self.training and hasattr(block.mlp, 'last_selected_experts'):
-                    sel = block.mlp.last_selected_experts  # (B, top_k)
-                    n_exp = self.config.n_expert
-                    if n_exp and sel is not None:
-                        counts = torch.bincount(sel.reshape(-1), minlength=n_exp)
-                        total = sel.numel() if sel.numel() > 0 else 1
-                        freqs = counts.to(torch.float32) / float(total)
-                        collected_freqs.append(freqs)
-                    else:
-                        collected_freqs.append(None)
-                else:
-                    collected_freqs.append(None)
             else:
                 # If it's a standard block, it returns only (output)
                 x = block(x)
-                collected_freqs.append(None)
                 
         x = self.transformer.ln_f(x)
-
-        # Expose latest routing information for external logging use
-        self.latest_routing = {
-            'layer_expert_freq': collected_freqs  # list of tensors or None per layer
-        }
 
         if targets is not None:
             # if we are given some desired targets also calculate the loss
