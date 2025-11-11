@@ -239,23 +239,24 @@ class SequenceMoE(nn.Module):
             # 1) Sequence-Level Routing: pool over tokens (cheap)
             sequence_rep = x.mean(dim=1)  # (B, C)
 
-            # 2) Router logits and probabilities in float32 for numerical stability
+            # 2) Router logits in float32 for numerical stability
             router_logits = self.router(sequence_rep)  # (B, n_expert)
+            # Keep a full softmax for importance/load calculations (float32)
             router_probs_full = F.softmax(router_logits, dim=-1, dtype=torch.float32)  # (B, n_expert)
 
-            # 3) Top-K selection (keep in float32 for accuracy), then cast weights to model dtype
-            weights_full, selected_experts = torch.topk(router_probs_full, self.top_k, dim=-1)  # (B, top_k)
+            # 3) Double-softmax Top-K (paper variant): select top-k logits, then softmax
+            #    across only the selected logits to produce the final per-sequence weights.
+            topk_logits, selected_experts = torch.topk(router_logits, self.top_k, dim=-1)  # (B, top_k)
+            topk_probs = F.softmax(topk_logits, dim=-1, dtype=torch.float32)  # (B, top_k)
 
             # --- Logging hook: store latest routing decisions for external inspection ---
-            # We detach and move minimally (keep on same device; training loop will .cpu() if needed)
-            # Only store during training to avoid unnecessary memory use at eval time.
             if self.training:
                 self.last_selected_experts = selected_experts.detach()
                 self.last_batch_size = B
                 self.last_top_k = self.top_k
-            weights = weights_full.to(x.dtype)
-            # Normalize across selected experts for each sequence
-            weights = weights / (weights.sum(dim=-1, keepdim=True) + 1e-9)
+
+            # weights are the top-k softmax probabilities (already normalized)
+            weights = topk_probs.to(x.dtype)
 
             # 4) Expert processing (vectorized): bucket by expert, run once per expert, scatter-add outputs
             final_output = torch.zeros_like(x)

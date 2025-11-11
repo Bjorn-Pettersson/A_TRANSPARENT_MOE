@@ -55,7 +55,7 @@ warmup_iters = 0           # optionally set >0 if you see instability
 # Evaluation / Logging cadence
 # ------------------------------
 eval_interval = 200
-eval_iters = 20
+eval_iters = 21
 log_interval = 1
 
 # Diagram-only plotting cadence (iterations). This only affects logging the
