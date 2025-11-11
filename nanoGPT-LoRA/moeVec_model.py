@@ -1,4 +1,3 @@
-
 """
 Full definition of a GPT Language Model, all of it in this single file.
 References:
@@ -193,10 +192,8 @@ class MLP(nn.Module):
 
     def __init__(self, config):
         super().__init__()
-        # Allow configurable expansion factor (default 4x)
-        hidden = int(getattr(config, 'ffn_mult', 4.0) * config.n_embd)
-        self.c_fc    = nn.Linear(config.n_embd, hidden, bias=config.bias)
-        self.c_proj  = nn.Linear(hidden, config.n_embd, bias=config.bias)
+        self.c_fc    = nn.Linear(config.n_embd, 4 * config.n_embd, bias=config.bias)
+        self.c_proj  = nn.Linear(4 * config.n_embd, config.n_embd, bias=config.bias)
         self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x):
@@ -323,8 +320,6 @@ class GPTConfig:
     n_embd: int = 768
     dropout: float = 0.0
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
-    # FFN width multiplier (4.0 = standard GPT2)
-    ffn_mult: float = 4.0
     # LoRA parameters
     lora_rank: int = 0
     lora_alpha: float = 0.0

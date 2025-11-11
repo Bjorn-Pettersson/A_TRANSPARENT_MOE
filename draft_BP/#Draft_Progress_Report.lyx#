@@ -871,11 +871,7 @@ We gather all the wieghted average logits from passing the sequences through
 \end_layout
 
 \begin_layout Subsubsection
-Optimised forward function (https://www.youtube.com/watch?v=G8x_SzpZME8)
-\end_layout
-
-\begin_layout Standard
-Possilbe repo: https://www.youtube.com/watch?v=G8x_SzpZME8
+Optimised forward function
 \end_layout
 
 \begin_layout Standard

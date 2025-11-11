@@ -193,10 +193,8 @@ class MLP(nn.Module):
 
     def __init__(self, config):
         super().__init__()
-        # Allow configurable expansion factor (default 4x)
-        hidden = int(getattr(config, 'ffn_mult', 4.0) * config.n_embd)
-        self.c_fc    = nn.Linear(config.n_embd, hidden, bias=config.bias)
-        self.c_proj  = nn.Linear(hidden, config.n_embd, bias=config.bias)
+        self.c_fc    = nn.Linear(config.n_embd, 4 * config.n_embd, bias=config.bias)
+        self.c_proj  = nn.Linear(4 * config.n_embd, config.n_embd, bias=config.bias)
         self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x):
@@ -234,55 +232,69 @@ class SequenceMoE(nn.Module):
 
 
     def forward(self, x):
-            B, T, C = x.size()  # batch size (B), sequence length (T), embedding dim (C)
+            B, T, C = x.size() # batch size (B), sequence length (T), embedding dim (C)
 
-            # 1) Sequence-Level Routing: pool over tokens (cheap)
-            sequence_rep = x.mean(dim=1)  # (B, C)
+            # 1. Sequence-Level Routing: Compute a single, global representation of the sequence
+            # Average the tokens across the sequence dimension (T)
+            sequence_rep = x.mean(dim=1) # shape: (B, C)
 
-            # 2) Router logits and probabilities in float32 for numerical stability
-            router_logits = self.router(sequence_rep)  # (B, n_expert)
-            router_probs_full = F.softmax(router_logits, dim=-1, dtype=torch.float32)  # (B, n_expert)
-
-            # 3) Top-K selection (keep in float32 for accuracy), then cast weights to model dtype
-            weights_full, selected_experts = torch.topk(router_probs_full, self.top_k, dim=-1)  # (B, top_k)
-            weights = weights_full.to(x.dtype)
-            # Normalize across selected experts for each sequence
-            weights = weights / (weights.sum(dim=-1, keepdim=True) + 1e-9)
-
-            # 4) Expert processing (vectorized): bucket by expert, run once per expert, scatter-add outputs
+            # 2. Router: Compute expert scores (logits) for the batch
+            router_logits = self.router(sequence_rep) # shape: (B, n_expert)
+            #tODO: this is the papers first softmax
+            # Calculate Full Probabilities (P_i) and ensure float32 for stable softmax
+            router_probs_full = F.softmax(router_logits, dim=-1, dtype=torch.float32) # (B, n_expert)
+            
+            # 3. Top-K Selection and Gating
+            # Convert back to the model's dtype (e.g., bfloat16/float16) for the forward pass
+            router_probs = router_probs_full.to(x.dtype)
+            
+            # Get the top-k experts and their scores (weights)
+            weights, selected_experts = torch.topk(router_probs, self.top_k, dim=-1) # (B, top_k)
+            # TODO: this is the papers second softmax, the normailisation is identical
+            # Normalize the top-k weights (crucial step from the paper's formula)
+            weights = weights / weights.sum(dim=-1, keepdim=True)
+            
+            # 4. Expert Processing and Weighted Sum
             final_output = torch.zeros_like(x)
 
-            # Flatten assignments across batch and top-k
-            flat_selected = selected_experts.reshape(-1)                 # (B*top_k,)
-            flat_weights = weights.reshape(-1)                           # (B*top_k,)
-            flat_batch = torch.arange(B, device=x.device).unsqueeze(1).expand(B, self.top_k).reshape(-1)  # (B*top_k,)
+            # Loop through the batch (B) to route each sequence
+            for i in range(B):
+                # The full sequence x[i] is processed by the selected experts
+                current_token_sequence = x[i] # shape: (T, C)
+                output_i = torch.zeros_like(current_token_sequence) 
 
-            # Iterate over experts (small loop over n_expert), process all assigned sequences in a single pass
-            for e, expert in enumerate(self.experts):
-                mask = (flat_selected == e)
-                if not torch.any(mask):
-                    continue
-                idx = mask.nonzero(as_tuple=False).squeeze(1)
-                assigned_batch = flat_batch.index_select(0, idx)         # (#assignments,)
-                assigned_weights = flat_weights.index_select(0, idx).to(x.dtype)  # (#assignments,)
+                # Loop through the Top-K selected experts for this sequence
+                for k in range(self.top_k):
+                    expert_idx = selected_experts[i, k].item()
+                    expert_weight = weights[i, k]
 
-                # Gather the sequences for this expert and run the expert MLP once on the mini-batch
-                x_e = x.index_select(0, assigned_batch)                   # (#assignments, T, C)
-                y_e = expert(x_e)                                         # (#assignments, T, C)
-                y_e = y_e * assigned_weights.view(-1, 1, 1)              # weight per sequence
+                    # Run the sequence through the k-th expert
+                    expert_output = self.experts[expert_idx](current_token_sequence) # (T, C)
 
-                # Scatter-add back into the final output along the batch dimension
-                final_output.index_add_(0, assigned_batch, y_e)
+                    # Weight the expert's output by the router's probability/weight
+                    output_i += expert_weight * expert_output
 
-            # 5) Load-balancing auxiliary loss using full probabilities (float32)
-            expert_importance = router_probs_full.sum(dim=0) / max(B, 1)
+                final_output[i] = output_i
+
+            # 5. Load Balancing Loss Calculation (L_aux)
+            # We use the full probability tensor (router_probs_full) for L_aux, which is numerically stable (float32).
+
+            # Expert Importance (P_i): Expected probability mass sent to each expert (across the batch)
+            # Sum of P_i across the batch: (B, n_expert) -> (n_expert,) 
+            expert_importance = router_probs_full.sum(dim=0) / B
+
             device = x.device
+            
             is_assigned = torch.zeros_like(router_probs_full, dtype=torch.float32, device=device).scatter_(
-                1, selected_experts.long(), 1.0
+                1, selected_experts.long(), 1.0 # The selected_experts is already on the GPU
             )
-            expert_load = is_assigned.sum(dim=0) / max(B, 1)
-            load_balancing_loss = self.n_expert * torch.sum(expert_importance * expert_load)
+            expert_load = is_assigned.sum(dim=0) / B
 
+            # L_aux = N * sum(Importance * Load)
+            # The goal is to minimize this product, which encourages Importance (P_i) and Load (f_i) to be uniform (1/N)
+            load_balancing_loss = self.n_expert * torch.sum(expert_importance * expert_load) 
+
+            # Return final output and the calculated auxiliary loss
             return final_output, load_balancing_loss
 
 # TODO: before self.mlp = MPL(config), now we change this to the MoE version if nr experts > 0
@@ -323,8 +335,6 @@ class GPTConfig:
     n_embd: int = 768
     dropout: float = 0.0
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
-    # FFN width multiplier (4.0 = standard GPT2)
-    ffn_mult: float = 4.0
     # LoRA parameters
     lora_rank: int = 0
     lora_alpha: float = 0.0

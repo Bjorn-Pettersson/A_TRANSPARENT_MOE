@@ -7,3 +7,9 @@ For the actual datasets .tar: C:\Users\bjorn\.cache\huggingface\hub
 
 run 6k run:
 python train.py config/bp_train_moe.py --device=cuda --out_dir='out-moe-6k'
+
+optimisations:
+    -Smaller expert size top 1 routing, vectorised loopo:
+    python train.py config/bp_train_moe_k1_shrink.py
+    -vectorised loop:
+    python train.py config/bp_train_moe_vectorized.py

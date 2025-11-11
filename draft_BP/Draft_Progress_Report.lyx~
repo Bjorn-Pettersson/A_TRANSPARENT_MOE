@@ -712,7 +712,8 @@ The origianl language modelling loss, cross entropy term
 
  is the total number of tokens being predicted, the sequence lenght, we
  find it in the GPT class Forward function as: main_loss = F.cross_entropy(logits.
-view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1):
+view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1), where F is
+ import torch.nn.functional as F:
 \end_layout
 
 \begin_layout Standard
@@ -789,6 +790,99 @@ F_{i}=\frac{1}{\mid B\mid}\sum_{x\in B}1_{selected}(x,i)
 \begin_layout Standard
 In our function SequenceMoE.forward we have Pi as expert_importance, Fi as
  expert_load, and Laux as load_balancing_loss, and Ltotal as total_loss
+\end_layout
+
+\begin_layout Subsubsection
+The modified Forward function:
+\end_layout
+
+\begin_layout Itemize
+We feed in a batch x, which contains B samples of T tokens with embedding
+ dimention C
+\end_layout
+
+\begin_layout Itemize
+We then average over the dimention T, to get a batch of instead of sequences
+ just one average token per sequence, so B average tokens of embedding dim
+ C.
+\end_layout
+
+\begin_layout Itemize
+Our router assignes weights based on these average tokens.
+ We get these by simply passing it through our onle dense FFN router layer
+ to obtain the logits, which we then normalise with softmax to obtain the
+ routing probabilites for each average token.
+ The paper mentions a 
+\begin_inset Quotes eld
+\end_inset
+
+double softmax
+\begin_inset Quotes erd
+\end_inset
+
+ this is the first part of it.
+\end_layout
+
+\begin_layout Itemize
+We use the topk funciton to obtain the selected top k experts and their
+ routing weighting/probability we obtained in step 3.
+ We now normalise this routing probability over the k selected experts so
+ it sums to 1 for teh selected k experts excluding the non selected ones.
+ This is the second part of the 
+\begin_inset Quotes eld
+\end_inset
+
+double softmax
+\begin_inset Quotes erd
+\end_inset
+
+ described.
+\end_layout
+
+\begin_layout Itemize
+We then loop through the batch B times, and obtain, this time the acutal
+ sequence.
+ (T,C)
+\end_layout
+
+\begin_deeper
+\begin_layout Itemize
+We then in an inner loop loop through each of our selected experts from
+ earlier based on our average tokens but now we route the actual sequences.
+ 
+\end_layout
+
+\begin_layout Itemize
+For each sequence we then have a weighted average between the output from
+ the top k experts.
+ (output_i)
+\end_layout
+
+\end_deeper
+\begin_layout Itemize
+We gather all the wieghted average logits from passing the sequences through
+ the expert FFNs, (all output_is) into a final output matrix, this is the
+ updated x vector after passing it through the MoE layer.
+ This vector is later passed through a language modelling head (see the
+ GPT class), linear layer to proejct the x vector from the embedding dimention
+ C upto the vocabulary size.
+ We then take the softmax over this final vector and choose the next token
+ with the highest probability.
+\end_layout
+
+\begin_layout Subsubsection
+Optimised forward function (https://www.youtube.com/watch?v=G8x_SzpZME8)
+\end_layout
+
+\begin_layout Standard
+However we found that this setup was very slow to run comapred to the regular
+ GPT2 traning on openWebText as suggested by Karpathy (nanoGPT, repo TODO).
+ One reason beeing the introduction of the double loop through B sequences
+ and for every sequence k experts.
+ Hene B*k expert FFN forward passes per batch x, instead of just one FFN
+ forward pass in Kaparthys example.
+ We optimise by replacing the double loop with a smaller loop over the K
+ experts, 
 \end_layout
 
 \end_body

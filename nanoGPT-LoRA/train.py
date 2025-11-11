@@ -54,13 +54,12 @@ n_head = 12
 n_embd = 768
 dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
 bias = False # do we use bias inside LayerNorm and Linear layers?
+ffn_mult = 4.0 # default FFN expansion factor; can be reduced in configs
 
-# TODO: MOE config defaults
-# --- ADD MOE CONFIG DEFAULTS HERE ---
-n_expert = 0 
+# TODO: MOE config defaults (can be overridden by config files)
+n_expert = 0
 n_routed_expert = 1
-load_balancing_lambda = 0.01 
-# ------------------------------------
+load_balancing_lambda = 0.01
 
 # LoRA params
 lora_rank = 0
@@ -156,8 +155,18 @@ try:
 
     # model init
     # Note: we only want to do LoRA fine-tuning when we resume or start with a pretrained model and NOT when we start from scratch
-    model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
-                    bias=bias, vocab_size=None, dropout=dropout) # start with model_args from command line
+    model_args = dict(
+        n_layer=n_layer,
+        n_head=n_head,
+        n_embd=n_embd,
+        block_size=block_size,
+        bias=bias,
+        vocab_size=None,
+        dropout=dropout,
+        ffn_mult=ffn_mult,
+        n_expert=n_expert,
+        n_routed_expert=n_routed_expert,
+    ) # start with model_args (configurable)
     if init_from == 'scratch':
         # init a new model from scratch
         print("Initializing a new model from scratch")
@@ -175,7 +184,7 @@ try:
         checkpoint_model_args = checkpoint['model_args']
         # force these config attributes to be equal otherwise we can't even resume training
         # the rest of the attributes (e.g. dropout) can stay as desired from command line
-        for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size', 'lora_rank', 'lora_alpha']:
+        for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size', 'lora_rank', 'lora_alpha', 'ffn_mult', 'n_expert', 'n_routed_expert']:
             model_args[k] = checkpoint_model_args.get(k, 0)
         # create the model
 
@@ -215,7 +224,7 @@ try:
         )
         model = GPT.from_pretrained(init_from, override_args)
         # read off the created config params, so we can store them into checkpoint correctly
-        for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size', 'lora_rank', 'lora_alpha']:
+        for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size', 'lora_rank', 'lora_alpha', 'ffn_mult', 'n_expert', 'n_routed_expert']:
             model_args[k] = getattr(model.config, k)
         
         if lora_rank > 0:
