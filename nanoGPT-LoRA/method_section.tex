@@ -1,0 +1,107 @@
+\documentclass{article}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{geometry}
+\geometry{a4paper, margin=1in}
+
+\title{Method Section: Sequence-level MoE Experiment}
+\author{}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\section{Overview}
+This experiment implements a sequence-level Mixture-of-Experts (MoE) variant using a GPT-2 small backbone and vectorized expert execution so that each expert is executed once per forward pass on the mini-batch of sequences assigned to it. The setup follows Fan et al. (Figure 2) choices where possible but is scaled to fit a single 16GB GPU. The routing is sequence-level (average token embedding), layer-wise (each transformer block has its own router), and Top-2 routing (K=2).
+
+\section{Model}
+\begin{itemize}
+    \item \textbf{Backbone:} GPT2-small-like: 12 layers, 12 attention heads, embedding dimension $n_{\text{embd}}=768$.
+    \item \textbf{Feed-forward (FFN):} MLP with configurable expansion ($\text{ffn\_mult}$ default 4.0 used implicitly).
+    \item \textbf{Mixture-of-Experts:}
+    \begin{itemize}
+        \item Experts per layer: $N = 4$ (ModuleList of classic MLPs).
+        \item Routing: Sequence-level router (linear projection from mean-pooled sequence embedding $\to N$ logits).
+        \item Top-K routing: $K = 2$ (each sequence is routed to top-2 experts in that layer).
+        \item Routing gating: the implementation uses top-k logits then applies softmax across the selected logits (i.e., $\text{softmax}(\text{topk\_logits})$) for the final per-sequence weights.
+        \item Load balancing auxiliary loss: $\lambda = 0.01$, computed from $\text{router\_probs}$ (importance) and assignment mask (load) as $L_{\text{aux}} = N \cdot \sum(\text{importance} \cdot \text{load})$.
+        \item Vectorized execution: sequences routed to the same expert are batched and the expert is run once on that batched subset; outputs are weighted and scattered back to reconstruct per-sequence outputs.
+    \end{itemize}
+\end{itemize}
+
+\section{Data}
+\begin{itemize}
+    \item \textbf{Dataset:} OpenWebText (default in repo). Tokenizer: OpenAI GPT-2 tokenizer (same as baseline).
+    \item \textbf{Input shape:} sequence length ($\text{block\_size}$) = 1024 tokens.
+    \item \textbf{Batch strategy:} tuned for single 16GB GPU: micro-batch size 4 with gradient accumulation 32 to simulate larger effective batch size.
+\end{itemize}
+
+\section{Training Hyperparameters}
+\begin{itemize}
+    \item Micro-batch size: 4
+    \item Gradient accumulation steps: 32
+    \item Effective tokens per optimizer step (tokens/iter): $4 \cdot 1024 \cdot 32 = 131,072$
+    \item Max iterations: 3,000 (so total tokens seen $\approx 131,072 \cdot 3,000 \approx 393,216,000 \approx 393$M tokens)
+    \item Learning rate: $9.6 \times 10^{-4}$ ($\text{min\_lr} = 9.6 \times 10^{-5}$, cosine decay over 3000 iters)
+    \item Weight decay: 0.5
+    \item Dropout: 0.2
+    \item Biases: enabled ($\text{bias}=\text{True}$)
+    \item Optimizer: AdamW (default use, consistent with train.py)
+    \item Device: single CUDA GPU (target: ~16GB VRAM)
+    \item Compile: False (PyTorch compile disabled by default for this run)
+    \item Logging / eval: $\text{eval\_interval} = 200$, $\text{eval\_iters} = 21$, $\text{log\_interval} = 1$, $\text{plot\_interval} = 50$
+    \item WandB: optional ($\text{wandb\_log}=\text{True}$ in config; project name: \texttt{moe-understanding})
+\end{itemize}
+
+\section{Routing and Diagnostics}
+\begin{itemize}
+    \item The model saves per-layer selected experts ($\text{selected\_experts}$) during training (for plotting Figure 2-style routing diagrams).
+    \item The experiment logs routing statistics periodically to allow inspection of weak specialization (expert frequency histograms per layer).
+    \item Per-sequence main losses are preserved: vectorized expert execution gathers per-expert mini-batches and scatters outputs back into $\text{final\_output}$ ($B, T, C$), so computing per-sequence cross-entropy ($\text{reduction}=\text{none}$) is identical to a non-vectorized implementation.
+\end{itemize}
+
+\section{Hardware and Run Budget}
+\begin{itemize}
+    \item \textbf{Intended hardware:} single 16GB GPU.
+    \item \textbf{Tokens / iter:} 131k tokens/iter (compared to the original experimental token throughput of ~1,048,576 tokens/iter).
+    \item \textbf{Run length:} 3,000 iterations. This is a constrained budget vs the original paper's much larger budgets, but should allow observation of routing behavior and early weak specialization patterns.
+\end{itemize}
+
+\section{Comparison Table}
+\begin{table}[h!]
+\centering
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{Setting / Metric} & \textbf{Original Experiment} & \textbf{This Run} \\
+\midrule
+Base model & nanoGPT with LoRA extension & GPT2-small-like (12L, 12H, 768d), MoE added to FFN \\
+Dropout & 0.2 & 0.2 \\
+Learning rate (max) & $9.6 \times 10^{-4}$ ($\text{min} = 9.6 \times 10^{-5}$) & $9.6 \times 10^{-4}$ ($\text{min} = 9.6 \times 10^{-5}$) \\
+Weight decay & 0.5 & 0.5 \\
+Enabled biases & for 6k iterations & biases enabled ($\text{bias}=\text{True}$) for whole run \\
+Token throughput / iteration & 1,048,576 tokens/iter & 131,072 tokens/iter ($4 \cdot 1024 \cdot 32$) \\
+Gradient accumulation & 128 & 32 \\
+Micro-batch size & 8 & 4 \\
+Sequence length & 1024 & 1024 \\
+Total tokens seen by model & 6B & $\approx 393$M ($131,072 \cdot 3,000$) \\
+N experts (per-layer) & 4 & 4 \\
+Tokens / parameter (Chinchilla) & 20 & (not matched — experiment uses smaller token budget) \\
+Load balancing loss weight $\lambda$ & 0.01 & 0.01 \\
+Tokenizer & OpenAI GPT-2 & OpenAI GPT-2 (default) \\
+LoRA & used in original extension & Not used ($\text{lora\_rank}=0$) \\
+Model FFN expansion & (implied 4x in original) & configurable $\text{ffn\_mult}$ (default 4.0 used) \\
+Routing granularity & Sequence-level & Sequence-level \\
+Routing top-K & Top-2 & Top-2 ($\text{n\_routed\_expert}=2$) \\
+Routing normalization & (unspecified in original doc) & top-k logits $\to \text{softmax}$ (double-softmax over selected logits) \\
+Auxiliary balancing loss & yes ($\lambda=0.01$) & yes ($\lambda=0.01$) \\
+Max iterations & (original: large — cumulative tokens 6B) & 3,000 \\
+Eval / Logging cadence & unspecified & $\text{eval\_interval}=200$, $\text{eval\_iters}=21$, $\text{log\_interval}=1$, $\text{plot\_interval}=50$ \\
+Device target & large multi-GPU / big TPU likely & single 16GB GPU \\
+Notes on compute & original used large token budget; heavier & reduced: smaller token budget, preserves architectural choices ($N=4$, Top-2) \\
+\bottomrule
+\end{tabular}
+\caption{Comparison of original experiment and this run (bp\_train\_moe\_vectorized\_16gb\_fan\_fig2).}
+\end{table}
+
+\end{document}

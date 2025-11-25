@@ -871,6 +871,37 @@ We gather all the wieghted average logits from passing the sequences through
 \end_layout
 
 \begin_layout Subsubsection
+Optimisation
+\end_layout
+
+\begin_layout Standard
+Since running the above proposed code litterally is computationally expensive
+ and we are limited to a 16gb gpu, we implemented an optimiseation.
+ The code is almost fucntionally the same: a Sequence-level Mixture-of-Experts
+ that (1) routes a sequence to top-k experts, (2) runs experts on the full
+ sequence, (3) aggregates weighted expert outputs, and (4) returns an auxiliary
+ load-balancing loss.
+ However they are not identical: there are numeric and implementation difference
+s that can produce different outputs and different runtime characteristics.
+ For our purposes we deem this tradeoff close enough and not detremental
+ to our results.
+ 
+\end_layout
+
+\begin_layout Standard
+The general optimisation of model.py vectorizes the expert computation by
+ bucketing sequences per expert and running each expert once on its assigned
+ mini-batch, while moe_model.py runs experts per-sequence (nested loop over
+ batch then top-k), causing repeated small forward passes.
+ This vectorization reduces duplicated work and greatly improves throughput
+ on GPUs when multiple sequences share experts.
+\end_layout
+
+\begin_layout Subsubsection
+Experiment setup
+\end_layout
+
+\begin_layout Subsubsection
 Optimised forward function (https://www.youtube.com/watch?v=G8x_SzpZME8)
 \end_layout
 
@@ -884,9 +915,8 @@ However we found that this setup was very slow to run comapred to the regular
  One reason beeing the introduction of the double loop through B sequences
  and for every sequence k experts.
  Hene B*k expert FFN forward passes per batch x, instead of just one FFN
- forward pass in Kaparthys example.
- We optimise by replacing the double loop with a smaller loop over the K
- experts, 
+ forward pass in Kaparthys example.We optimise by replacing the double loop
+ with a smaller loop over the K experts, 
 \end_layout
 
 \end_body
