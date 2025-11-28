@@ -213,8 +213,8 @@ try:
             if k.startswith(unwanted_prefix):
                 state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
         model.load_state_dict(state_dict)
-        iter_num = checkpoint['iter_num']
-        best_val_loss = checkpoint['best_val_loss']
+        iter_num = checkpoint.get('iter_num', checkpoint.get('iter_global', 0))
+        best_val_loss = checkpoint.get('best_val_loss', 1e9)
 
         if lora_rank > 0:
             # Only make LoRA weights tunable
@@ -335,7 +335,8 @@ try:
 
 except Exception as e:
     # Print the specific error and its full traceback
-    print(f"FATAL ERROR on rank {ddp_rank}: {e}")
+    rank = int(os.environ.get('RANK', -1)) if 'RANK' in os.environ else -1
+    print(f"FATAL ERROR on rank {rank}: {e}")
     import traceback
     traceback.print_exc()
     # Ensure the process exits to signal failure

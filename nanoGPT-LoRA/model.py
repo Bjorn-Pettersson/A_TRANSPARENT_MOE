@@ -250,10 +250,16 @@ class SequenceMoE(nn.Module):
             topk_probs = F.softmax(topk_logits, dim=-1, dtype=torch.float32)  # (B, top_k)
 
             # --- Logging hook: store latest routing decisions for external inspection ---
-            if self.training:
+            # Save routing selections for both training and evaluation so external
+            # evaluation scripts can inspect per-batch selections without toggling
+            # the module into `train()` (which would enable dropout etc.).
+            try:
+                self.last_selected_experts = selected_experts.detach().cpu()
+            except Exception:
+                # fallback: keep on-device if detach to cpu fails
                 self.last_selected_experts = selected_experts.detach()
-                self.last_batch_size = B
-                self.last_top_k = self.top_k
+            self.last_batch_size = B
+            self.last_top_k = self.top_k
 
             # weights are the top-k softmax probabilities (already normalized)
             weights = topk_probs.to(x.dtype)
@@ -416,11 +422,15 @@ class GPT(nn.Module):
                 x, aux_loss = block(x) 
                 total_aux_loss += aux_loss
                 # Try to compute per-layer expert frequency from most recent routing if available
-                if self.training and hasattr(block.mlp, 'last_selected_experts'):
+                # Collect routing selections if available (support both train and eval)
+                if hasattr(block.mlp, 'last_selected_experts') and block.mlp.last_selected_experts is not None:
                     sel = block.mlp.last_selected_experts  # (B, top_k)
                     n_exp = self.config.n_expert
                     if n_exp and sel is not None:
-                        counts = torch.bincount(sel.reshape(-1), minlength=n_exp)
+                        # ensure sel is on the same device for bincount
+                        sel_device = sel.device
+                        sel_flat = sel.reshape(-1).to(device=sel_device)
+                        counts = torch.bincount(sel_flat, minlength=n_exp)
                         total = sel.numel() if sel.numel() > 0 else 1
                         freqs = counts.to(torch.float32) / float(total)
                         collected_freqs.append(freqs)

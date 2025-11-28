@@ -13,3 +13,36 @@ optimisations:
     python train.py config/bp_train_moe_k1_shrink.py
     -vectorised loop:
     python train.py config/bp_train_moe_vectorized.py
+
+LOOKING AT DATA:
+openwebtext: python data/openwebtext/simSampleData.py --data-dir data/openwebtext
+
+# ------------------ TRAIN WITH PRETRANING ----------------------- (test if works)
+1. place the MMLU tran test splits for the 4 subjects in the data/mmlu folder
+2. Run pretrainig with:
+cd "d:\OneDrive - University of Copenhagen\SNU\ADVANCED_DEEP_LEARNING\A_TRANSPARENT_MOE\nanoGPT-LoRA"
+
+python pretrain.py `
+  --data_dir data/mmlu `
+  --out_dir out-pretrain-4gb-mmlu `
+  --subjects "college_chemistry,global_facts,management,medical_genetics" `
+  --n_layer 4 --n_head 4 --n_embd 128 --ffn_mult 2.0 --dropout 0.0 --bias `
+  --n_expert 4 --n_routed_expert 2 --block_size 128 `
+  --batch_size 4 --iters_per_subject 400 --eval_interval 100 --eval_iters 20 --log_interval 10 `
+  --learning_rate 3e-4 --weight_decay 1e-1 --beta1 0.9 --beta2 0.95 --grad_clip 1.0 `
+  --warmup_iters 50 --min_lr 3e-5 --decay_lr --device cuda --dtype bfloat16 --compile
+
+
+3. Resume traning using pretrained experts:
+python train.py --init_from resume --out_dir out-pretrain-4gb-mmlu --dataset openwebtext --n_expert 4 --n_routed_expert 2
+
+--------------------- MMLU eval-------------------------
+To logg activation patterns on MMLU prompts form the MoE model:
+
+Set-Location D:\OneDrive - University of Copenhagen\SNU\ADVANCED_DEEP_LEARNING\A_TRANSPARENT_MOE\nanoGPT-LoRA\eval
+python .\eval_mmlu.py `
+  --checkpoint ..\out-pretrain-4gb-mmlu\ckpt.pt `
+  --data_dir ..\data\mmlu `
+  --out_dir ..\eval_results `
+  --subjects global_facts,abstract_algebra,medical_genetics,management,college_biology,college_chemistry `
+  --layers_to_plot all

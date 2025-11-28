@@ -2,7 +2,7 @@ from datasets import load_dataset, concatenate_datasets
 import os
 
 # --- 1. Set Custom Cache Directory ---
-custom_cache_path = r'D:\OneDrive - University of Copenhagen\SNU\ADVANCED_DEEP_LEARNING\TRANSPARENT_MOE\MMLU_EXPERIMENTS'
+custom_cache_path = r'D:\OneDrive - University of Copenhagen\SNU\ADVANCED_DEEP_LEARNING\A_TRANSPARENT_MOE\MMLU_EXPERIMENTS'
 os.environ['HF_DATASETS_CACHE'] = custom_cache_path
 
 print(f"Hugging Face datasets cache set to: {custom_cache_path}")
