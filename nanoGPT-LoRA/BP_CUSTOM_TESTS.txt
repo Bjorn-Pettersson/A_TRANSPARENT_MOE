@@ -36,6 +36,9 @@ python pretrain.py `
 3. Resume traning using pretrained experts:
 python train.py --init_from resume --out_dir out-pretrain-4gb-mmlu --dataset openwebtext --n_expert 4 --n_routed_expert 2
 
+3.update TODO test with pretrainin
+python train.py config/bp_train_4gb_test_wandb.py
+
 --------------------- MMLU eval-------------------------
 To logg activation patterns on MMLU prompts form the MoE model:
 

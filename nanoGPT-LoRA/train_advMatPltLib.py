@@ -12,7 +12,7 @@ To run with DDP on 4 gpus across 2 nodes, example:
 - Run on the first (master) node with example IP 123.456.123.456:
 $ torchrun --nproc_per_node=8 --nnodes=2 --node_rank=0 --master_addr=123.456.123.456 --master_port=1234 train.py
 - Run on the worker node:
-$ torchrun --nproc_per_node=8 --nnodes=3 --node_rank=1 --master_addr=123.456.123.456 --master_port=1234 train.py
+$ torchrun --nproc_per_node=8 --nnodes=2 --node_rank=1 --master_addr=123.456.123.456 --master_port=1234 train.py
 (If your cluster does not have Infiniband interconnect prepend NCCL_IB_DISABLE=1)
 """
 
@@ -305,7 +305,11 @@ try:
     if wandb_log and master_process:
         import wandb
         wandb.init(project=wandb_project, name=wandb_run_name, config=config)
-        # Prepare a history buffer to accumulate routing frequencies per layer/expert
+        # Create a routing table for Fig.6-style scatter (iter vs expert freq per layer/expert)
+        routing_columns = ["iter","layer","expert","freq"]
+        wandb_routing_table = wandb.Table(columns=routing_columns)
+        # Log once immediately so the table schema appears in the UI
+        wandb.log({"routing/scatter_table": wandb_routing_table})
         # Prepare a history buffer to accumulate routing frequencies per layer/expert
         # Attach it to the underlying model object (handles DDP wrapper if present)
         try:
@@ -487,7 +491,7 @@ while True:
                 # best-effort: if anything fails, skip routing accumulation for this step
                 target_hist = None
 
-            # base log: core training scalars + per-layer expert activation (scalar-only)
+            # base log: only core training scalars (avoid logging per-expert scalars to reduce clutter)
             base_log = {
                 "iter": iter_num,
                 "train/LM_loss": main_lossf,
@@ -496,23 +500,53 @@ while True:
                 "lr": lr,
                 "mfu": running_mfu*100,
             }
-
-            # If routing history exists, append latest per-layer/expert frequencies
-            try:
-                hist = getattr(raw_model, '_wandb_routing_history', None)
-                if hist is not None:
-                    # assume 12 layers and up to 4 experts as common defaults
-                    for li in range(len(hist)):
-                        freqs = hist[li]['freqs']
-                        for ei, series in freqs.items():
-                            if len(series) > 0:
-                                base_log[f"layer{li}/expert{ei}"] = series[-1]
-            except Exception:
-                pass
-
             wandb.log(base_log)
 
-            # Remove matplotlib image logging; keep scalar-only logging
+            # Periodically render a single multi-panel figure (one subplot per layer) and log it.
+            try:
+                # render according to plot_interval (configurable); fallback to eval_interval
+                render_period = max(1, int(plot_interval)) if 'plot_interval' in globals() else max(1, int(eval_interval))
+                hist = getattr(raw_model, '_wandb_routing_history', None)
+                if hist is not None and (iter_num % render_period == 0):
+                    n_layers = len(hist)
+                    # determine number of experts from first layer
+                    first_layer = hist.get(0, None)
+                    n_experts = len(first_layer['freqs']) if first_layer is not None else 0
+
+                    ncols = 4
+                    nrows = (n_layers + ncols - 1) // ncols
+                    fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(4*ncols, 3*nrows), squeeze=False)
+                    for li in range(n_layers):
+                        r = li // ncols
+                        c = li % ncols
+                        ax = axes[r][c]
+                        iters = hist[li]['iters']
+                        if len(iters) == 0:
+                            ax.set_title(f"Layer {li}")
+                            ax.set_ylim(0, 1)
+                            ax.set_xlabel('iter')
+                            ax.set_ylabel('freq')
+                            continue
+                        for ei, vals in hist[li]['freqs'].items():
+                            ax.plot(iters, vals, marker='o', markersize=3, linewidth=1, label=f'E{ei}')
+                        ax.set_title(f"Layer {li}")
+                        ax.set_ylim(0, 1)
+                        ax.set_xlabel('iter')
+                        ax.set_ylabel('freq')
+                        if li == 0:
+                            ax.legend(loc='upper right', fontsize=7)
+                    # turn off unused axes
+                    for j in range(n_layers, nrows * ncols):
+                        r = j // ncols
+                        c = j % ncols
+                        axes[r][c].axis('off')
+                    plt.tight_layout()
+                    # log a single image that contains all layers (12 diagrams in the grid)
+                    wandb.log({"moe/routing_by_layer": wandb.Image(fig), "iter": iter_num})
+                    plt.close(fig)
+            except Exception:
+                # if plotting/logging fails, ignore to not interrupt training
+                pass
     iter_num += 1
     local_iter_num += 1
 
