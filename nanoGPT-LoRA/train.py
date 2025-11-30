@@ -17,6 +17,7 @@ $ torchrun --nproc_per_node=8 --nnodes=3 --node_rank=1 --master_addr=123.456.123
 """
 
 import os
+import argparse
 import time
 import math
 import pickle
@@ -99,6 +100,16 @@ device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps'
 dtype = 'bfloat16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
 compile = True # use PyTorch 2.0 to compile the model to be faster
 # -----------------------------------------------------------------------------
+# Add optional explicit resume checkpoint path via CLI arg that can coexist with
+# the existing configurator-based overrides.
+parser = argparse.ArgumentParser(add_help=False)
+parser.add_argument('--resume_ckpt_path', type=str, default=None, help='Explicit checkpoint path to resume from when init_from=resume')
+parser.add_argument('--reset_iter', action='store_true', help='When resuming, reset iteration counter and best_val_loss (start fresh stage)')
+known, unknown = parser.parse_known_args()
+# Define global so configurator.py recognizes the key when passed as --resume_ckpt_path=...
+resume_ckpt_path = known.resume_ckpt_path
+reset_iter = known.reset_iter
+
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
 exec(open('configurator.py').read()) # overrides from command line or config file
 config = {k: globals()[k] for k in config_keys} # will be useful for logging
@@ -123,9 +134,16 @@ try:
         norm = out_dir.replace('\\', '/').lstrip('./')
         if not (norm == 'out' or norm.startswith('out/')):
             out_dir = os.path.join('out', out_dir)
-        # If still exactly 'out', create a run subfolder name
+        # If still exactly 'out', create a run subfolder name with timestamp
         if norm == '' or norm == 'out':
-            run_name = _cfg_name or (wandb_run_name if isinstance(wandb_run_name, str) and len(wandb_run_name) > 0 else None) or f"run_{_stamp}"
+            base_name = None
+            if _cfg_name:
+                base_name = _cfg_name
+            elif isinstance(wandb_run_name, str) and len(wandb_run_name) > 0:
+                base_name = wandb_run_name
+            else:
+                base_name = 'run'
+            run_name = f"{base_name}-{_stamp}"
             out_dir = os.path.join('out', run_name)
     # else: absolute path -> leave unchanged
 except Exception:
@@ -222,8 +240,13 @@ try:
         model = GPT(gptconf)
     elif init_from == 'resume':
         print(f"Resuming training from {out_dir}")
-        # resume training from a checkpoint.
-        ckpt_path = os.path.join(out_dir, 'ckpt.pt')
+        # resume training from a checkpoint. Prefer explicit resume_ckpt_path if provided.
+        ckpt_path = resume_ckpt_path if resume_ckpt_path else os.path.join(out_dir, 'ckpt.pt')
+        if not os.path.exists(ckpt_path):
+            raise FileNotFoundError(
+                f"Resume requested (init_from=resume) but checkpoint not found: '{ckpt_path}'. "
+                "Ensure you ran the merge (post_train.py) or copied the seed ckpt into this directory."
+            )
         checkpoint = torch.load(ckpt_path, map_location=device)
         checkpoint_model_args = checkpoint['model_args']
         # force these config attributes to be equal otherwise we can't even resume training
@@ -250,6 +273,13 @@ try:
         model.load_state_dict(state_dict)
         iter_num = checkpoint.get('iter_num', checkpoint.get('iter_global', 0))
         best_val_loss = checkpoint.get('best_val_loss', 1e9)
+
+        if reset_iter:
+            print(f"[resume] --reset_iter specified: resetting iter_num from {iter_num} -> 0 and best_val_loss -> 1e9; reinitializing optimizer.")
+            iter_num = 0
+            best_val_loss = 1e9
+            # Rebuild optimizer fresh (discarding loaded state)
+            optimizer = model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), device_type)
 
         # CLEANUP: remove any forced expert routing attributes so router can learn normally
         removed = 0
@@ -302,7 +332,15 @@ try:
     # optimizer
     optimizer = model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), device_type)
     if init_from == 'resume':
-        optimizer.load_state_dict(checkpoint['optimizer'])
+        opt_state = checkpoint.get('optimizer', {})
+        try:
+            # Only load if state looks valid
+            if isinstance(opt_state, dict) and 'param_groups' in opt_state:
+                optimizer.load_state_dict(opt_state)
+            else:
+                print("[resume] optimizer state unavailable or invalid; using fresh optimizer")
+        except Exception as e:
+            print(f"[resume] failed to load optimizer state: {e}; proceeding with fresh optimizer")
     checkpoint = None # free up memory
 
     # compile the model

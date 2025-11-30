@@ -117,10 +117,15 @@ class SubjectDataset:
 # -------------------------- Pretraining Logic -------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="Pretrain MoE experts per subject")
+    # First, create a lightweight parser to capture optional config file
+    bootstrap = argparse.ArgumentParser(add_help=False)
+    bootstrap.add_argument('--config', type=str, default=None, help='Optional Python config file to preset arguments')
+    boot_known, boot_unknown = bootstrap.parse_known_args()
+
+    parser = argparse.ArgumentParser(description="Pretrain MoE experts per subject", parents=[bootstrap])
     # I/O and training control
     parser.add_argument('--data_dir', type=str, default=os.path.join('data', 'mmlu'))
-    parser.add_argument('--out_dir', type=str, default='out-pretrain')
+    parser.add_argument('--out_dir', type=str, default='out')
     parser.add_argument('--subjects', type=str, default='college_chemistry,global_facts,management,medical_genetics')
     parser.add_argument('--iters_per_subject', type=int, default=2000)
     parser.add_argument('--eval_interval', type=int, default=200)
@@ -167,7 +172,43 @@ def main():
     parser.add_argument('--dtype', type=str, default='bfloat16', choices=['float32','float16','bfloat16'])
     parser.add_argument('--seed', type=int, default=1337)
 
+    # If a config file is provided, execute it to collect defaults
+    if boot_known.config:
+        cfg_path = boot_known.config
+        print(f"Loading pretrain config: {cfg_path}")
+        # Execute config file in isolated dict and apply known keys as defaults
+        cfg_locals: dict = {}
+        with open(cfg_path, 'r', encoding='utf-8') as cf:
+            code = cf.read()
+        exec(compile(code, cfg_path, 'exec'), {}, cfg_locals)
+        # Map known config keys into parser defaults if present
+        for key, val in cfg_locals.items():
+            if key in { 'data_dir','out_dir','subjects','iters_per_subject','eval_interval','eval_iters','log_interval','init_from',
+                        'block_size','batch_size','n_layer','n_head','n_embd','dropout','bias','ffn_mult','n_expert','n_routed_expert','load_balancing_lambda',
+                        'learning_rate','weight_decay','beta1','beta2','grad_clip','warmup_iters','min_lr','decay_lr','compile',
+                        'subject_expert_map','freeze_non_target_experts','train_non_expert_modules','export_experts',
+                        'device','dtype','seed' }:
+                parser.set_defaults(**{key: val})
+
     args = parser.parse_args()
+
+    # Resolve final output directory so runs land under the base 'out' folder.
+    # Rules:
+    # - Absolute paths in out_dir are respected as-is.
+    # - Relative paths that already start with 'out/' are respected.
+    # - Other relative paths are nested under 'out/<out_dir>'.
+    # - If the result is exactly 'out' (or empty), append an auto run name 'pretrain_<timestamp>'.
+    try:
+        _stamp = time.strftime('%Y%m%d_%H%M%S')
+        if not os.path.isabs(args.out_dir):
+            norm = args.out_dir.replace('\\', '/').lstrip('./')
+            if not (norm == 'out' or norm.startswith('out/')):
+                args.out_dir = os.path.join('out', args.out_dir)
+            if norm == '' or norm == 'out':
+                run_name = f"pretrain_{_stamp}"
+                args.out_dir = os.path.join('out', run_name)
+    except Exception:
+        pass
 
     os.makedirs(args.out_dir, exist_ok=True)
 

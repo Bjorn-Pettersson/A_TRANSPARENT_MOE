@@ -19,13 +19,22 @@ from ast import literal_eval
 
 for arg in sys.argv[1:]:
     if '=' not in arg:
-        # assume it's the name of a config file
-        assert not arg.startswith('--')
-        config_file = arg
-        print(f"Overriding config with {config_file}:")
-        with open(config_file) as f:
-            print(f.read())
-        exec(open(config_file).read())
+        if arg.startswith('--'):
+            # Treat bare --flag as boolean True override if it exists and is bool
+            key = arg[2:]
+            if key in globals() and isinstance(globals()[key], bool):
+                print(f"Overriding: {key} = True")
+                globals()[key] = True
+            else:
+                # If it's not a known bool, raise to avoid silent mistakes
+                raise ValueError(f"Unknown or non-bool flag used without value: {arg}. Use --{key}=<value> format.")
+        else:
+            # assume it's the name of a config file
+            config_file = arg
+            print(f"Overriding config with {config_file}:")
+            with open(config_file) as f:
+                print(f.read())
+            exec(open(config_file).read())
     else:
         # assume it's a --key=value argument
         assert arg.startswith('--')
@@ -33,14 +42,12 @@ for arg in sys.argv[1:]:
         key = key[2:]
         if key in globals():
             try:
-                # attempt to eval it it (e.g. if bool, number, or etc)
                 attempt = literal_eval(val)
             except (SyntaxError, ValueError):
-                # if that goes wrong, just use the string
                 attempt = val
-            # ensure the types match ok
-            assert type(attempt) == type(globals()[key])
-            # cross fingers
+            # allow None->typed transitions (e.g., None to str) by relaxing strict type match
+            if globals()[key] is not None and type(attempt) != type(globals()[key]):
+                raise TypeError(f"Type mismatch for {key}: have {type(globals()[key]).__name__}, new {type(attempt).__name__}")
             print(f"Overriding: {key} = {attempt}")
             globals()[key] = attempt
         else:

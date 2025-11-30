@@ -77,7 +77,8 @@ def main():
         filename = os.path.join(args.experts_dir, f"expert{exp_idx}_{subject}.pt")
         if not os.path.exists(filename):
             raise FileNotFoundError(f"Export file not found for subject '{subject}', expert {exp_idx}: {filename}")
-        blob = torch.load(filename, map_location='cpu')
+        # Load weights-only for safety; expert export files contain plain tensors
+        blob = torch.load(filename, map_location='cpu', weights_only=True)
         # iterate layers
         for li, blk in enumerate(model.transformer.h):
             key = f'layer_{li}'
@@ -87,7 +88,8 @@ def main():
             mlp = getattr(blk, 'mlp', None)
             assert hasattr(mlp, 'experts'), 'Target model is not MoE at this block'
             expert = mlp.experts[exp_idx]
-            expert.load_state_dict(state)
+            # Allow missing keys like biases if the source export did not include them
+            expert.load_state_dict(state, strict=False)
         print(f"Loaded subject '{subject}' into expert {exp_idx} across all layers")
 
     # Save merged checkpoint
