@@ -1,243 +1,177 @@
-
-# nanoGPT - LoRA
-
-Adapted nanoGPT to support LoRA.
-
-### TODOs
-
-- [X] Ensure that training pipeline is correct
-- [X] Merge A and B with W for inference
-- [ ] Measure performance difference between normal fine-tuning and LoRA fine-tuning
-- [ ] Compare memory consumption of LoRA and normal fine-tuning
-
-
-Some initial runs with GPT-2 124M:
-
-Performance:
-- w/ LoRA: step 20: train loss 3.6281, val loss 3.4601
-- w/o LoRA: step 20: train loss 3.4118, val loss 3.3365
-
-Memory consumption of gradients:
-- w/ LoRA: grad memory usage: 1.69 MB
-- w/o LoRA: grad memory usage: 474.70 MB
-
-=> ~280x less memory usage using LoRA
-
-
-![nanoGPT](assets/nanogpt.jpg)
-
-The simplest, fastest repository for training/finetuning medium-sized GPTs. It is a rewrite of [minGPT](https://github.com/karpathy/minGPT) that prioritizes teeth over education. Still under active development, but currently the file `train.py` reproduces GPT-2 (124M) on OpenWebText, running on a single 8XA100 40GB node in about 4 days of training. The code itself is plain and readable: `train.py` is a ~300-line boilerplate training loop and `model.py` a ~300-line GPT model definition, which can optionally load the GPT-2 weights from OpenAI. That's it.
-
-![repro124m](assets/gpt2_124M_loss.png)
-
-Because the code is so simple, it is very easy to hack to your needs, train new models from scratch, or finetune pretrained checkpoints (e.g. biggest one currently available as a starting point would be the GPT-2 1.3B model from OpenAI).
-
-## install
-
-Dependencies:
-
-- [pytorch](https://pytorch.org) <3
-- [numpy](https://numpy.org/install/) <3
-- `pip install transformers` for huggingface transformers <3 (to load GPT-2 checkpoints)
-- `pip install datasets` for huggingface datasets <3 (if you want to download + preprocess OpenWebText)
-- `pip install tiktoken` for OpenAI's fast BPE code <3
-- `pip install wandb` for optional logging <3
-- `pip install tqdm` <3
-
-=> `pip install torch transformers datasets tiktoken wandb tqdm`
-
-## quick start
-
-If you are not a deep learning professional and you just want to feel the magic and get your feet wet, the fastest way to get started is to train a character-level GPT on the works of Shakespeare. First, we download it as a single (1MB) file and turn it from raw text into one large stream of integers:
-
-```
-$ python data/shakespeare_char/prepare.py
-```
-
-This creates a `train.bin` and `val.bin` in that data directory. Now it is time to train your GPT. The size of it very much depends on the computational resources of your system:
-
-**I have a GPU**. Great, we can quickly train a baby GPT with the settings provided in the [config/train_shakespeare_char.py](config/train_shakespeare_char.py) config file:
-
-```
-$ python train.py config/train_shakespeare_char.py
-```
-
-If you peek inside it, you'll see that we're training a GPT with a context size of up to 256 characters, 384 feature channels, and it is a 6-layer Transformer with 6 heads in each layer. On one A100 GPU this training run takes about 3 minutes and the best validation loss is 1.4697. Based on the configuration, the model checkpoints are being written into the `--out_dir` directory `out-shakespeare-char`. So once the training finishes we can sample from the best model by pointing the sampling script at this directory:
-
-```
-$ python sample.py --out_dir=out-shakespeare-char
-```
-
-This generates a few samples, for example:
-
-```
-ANGELO:
-And cowards it be strawn to my bed,
-And thrust the gates of my threats,
-Because he that ale away, and hang'd
-An one with him.
-
-DUKE VINCENTIO:
-I thank your eyes against it.
-
-DUKE VINCENTIO:
-Then will answer him to save the malm:
-And what have you tyrannous shall do this?
-
-DUKE VINCENTIO:
-If you have done evils of all disposition
-To end his power, the day of thrust for a common men
-That I leave, to fight with over-liking
-Hasting in a roseman.
-```
-
-lol  `¯\_(ツ)_/¯`. Not bad for a character-level model after 3 minutes of training on a GPU. Better results are quite likely obtainable by instead finetuning a pretrained GPT-2 model on this dataset (see finetuning section later).
-
-**I only have a macbook** (or other cheap computer). No worries, we can still train a GPT but we want to dial things down a notch. I recommend getting the bleeding edge PyTorch nightly ([select it here](https://pytorch.org/get-started/locally/) when installing) as it is currently quite likely to make your code more efficient. But even without it, a simple train run could look as follows:
-
-```
-$ python train.py config/train_shakespeare_char.py --device=cpu --compile=False --eval_iters=20 --log_interval=1 --block_size=64 --batch_size=12 --n_layer=4 --n_head=4 --n_embd=128 --max_iters=2000 --lr_decay_iters=2000 --dropout=0.0
-```
-
-Here, since we are running on CPU instead of GPU we must set both `--device=cpu` and also turn off PyTorch 2.0 compile with `--compile=False`. Then when we evaluate we get a bit more noisy but faster estimate (`--eval_iters=20`, down from 200), our context size is only 64 characters instead of 256, and the batch size only 12 examples per iteration, not 64. We'll also use a much smaller Transformer (4 layers, 4 heads, 128 embedding size), and decrease the number of iterations to 2000 (and correspondingly usually decay the learning rate to around max_iters with `--lr_decay_iters`). Because our network is so small we also ease down on regularization (`--dropout=0.0`). This still runs in about ~3 minutes, but gets us a loss of only 1.88 and therefore also worse samples, but it's still good fun:
-
-```
-GLEORKEN VINGHARD III:
-Whell's the couse, the came light gacks,
-And the for mought you in Aut fries the not high shee
-bot thou the sought bechive in that to doth groan you,
-No relving thee post mose the wear
-```
-
-Not bad for ~3 minutes on a CPU, for a hint of the right character gestalt. If you're willing to wait longer, feel free to tune the hyperparameters, increase the size of the network, the context length (`--block_size`), the length of training, etc.
-
-Finally, on Apple Silicon Macbooks and with a recent PyTorch version make sure to add `--device mps` (short for "Metal Performance Shaders"); PyTorch then uses the on-chip GPU that can *significantly* accelerate training (2-3X) and allow you to use larger networks. See [Issue 28](https://github.com/karpathy/nanoGPT/issues/28) for more.
-
-## reproducing GPT-2
-
-A more serious deep learning professional may be more interested in reproducing GPT-2 results. So here we go - we first tokenize the dataset, in this case the [OpenWebText](https://openwebtext2.readthedocs.io/en/latest/), an open reproduction of OpenAI's (private) WebText:
-
-```
-$ python data/openwebtext/prepare.py
-```
-
-This downloads and tokenizes the [OpenWebText](https://huggingface.co/datasets/openwebtext) dataset. It will create a `train.bin` and `val.bin` which holds the GPT2 BPE token ids in one sequence, stored as raw uint16 bytes. Then we're ready to kick off training. To reproduce GPT-2 (124M) you'll want at least an 8X A100 40GB node and run:
-
-```
-$ torchrun --standalone --nproc_per_node=8 train.py config/train_gpt2.py
-```
-
-This will run for about 4 days using PyTorch Distributed Data Parallel (DDP) and go down to loss of ~2.85. Now, a GPT-2 model just evaluated on OWT gets a val loss of about 3.11, but if you finetune it it will come down to ~2.85 territory (due to an apparent domain gap), making the two models ~match.
-
-If you're in a cluster environment and you are blessed with multiple GPU nodes you can make GPU go brrrr e.g. across 2 nodes like:
-
-```
-Run on the first (master) node with example IP 123.456.123.456:
-$ torchrun --nproc_per_node=8 --nnodes=2 --node_rank=0 --master_addr=123.456.123.456 --master_port=1234 train.py
-Run on the worker node:
-$ torchrun --nproc_per_node=8 --nnodes=2 --node_rank=1 --master_addr=123.456.123.456 --master_port=1234 train.py
-```
-
-It is a good idea to benchmark your interconnect (e.g. iperf3). In particular, if you don't have Infiniband then also prepend `NCCL_IB_DISABLE=1` to the above launches. Your multinode training will work, but most likely _crawl_. By default checkpoints are periodically written to the `--out_dir`. We can sample from the model by simply `$ python sample.py`.
-
-Finally, to train on a single GPU simply run the `$ python train.py` script. Have a look at all of its args, the script tries to be very readable, hackable and transparent. You'll most likely want to tune a number of those variables depending on your needs.
-
-## baselines
-
-OpenAI GPT-2 checkpoints allow us to get some baselines in place for openwebtext. We can get the numbers as follows:
-
-```
-$ python train.py eval_gpt2
-$ python train.py eval_gpt2_medium
-$ python train.py eval_gpt2_large
-$ python train.py eval_gpt2_xl
-```
-
-and observe the following losses on train and val:
-
-| model | params | train loss | val loss |
-| ------| ------ | ---------- | -------- |
-| gpt2 | 124M         | 3.11  | 3.12     |
-| gpt2-medium | 350M  | 2.85  | 2.84     |
-| gpt2-large | 774M   | 2.66  | 2.67     |
-| gpt2-xl | 1558M     | 2.56  | 2.54     |
-
-However, we have to note that GPT-2 was trained on (closed, never released) WebText, while OpenWebText is just a best-effort open reproduction of this dataset. This means there is a dataset domain gap. Indeed, taking the GPT-2 (124M) checkpoint and finetuning on OWT directly for a while reaches loss down to ~2.85. This then becomes the more appropriate baseline w.r.t. reproduction.
-
-## finetuning
-
-Finetuning is no different than training, we just make sure to initialize from a pretrained model and train with a smaller learning rate. For an example of how to finetune a GPT on new text go to `data/shakespeare` and run `prepare.py` to download the tiny shakespeare dataset and render it into a `train.bin` and `val.bin`, using the OpenAI BPE tokenizer from GPT-2. Unlike OpenWebText this will run in seconds. Finetuning can take very little time, e.g. on a single GPU just a few minutes. Run an example finetuning like:
-
-```
-$ python train.py config/finetune_shakespeare.py
-```
-
-This will load the config parameter overrides in `config/finetune_shakespeare.py` (I didn't tune them much though). Basically, we initialize from a GPT2 checkpoint with `init_from` and train as normal, except shorter and with a small learning rate. If you're running out of memory try decreasing the model size (they are `{'gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl'}`) or possibly decreasing the `block_size` (context length). The best checkpoint (lowest validation loss) will be in the `out_dir` directory, e.g. in `out-shakespeare` by default, per the config file. You can then run the code in `sample.py --out_dir=out-shakespeare`:
-
-```
-THEODORE:
-Thou shalt sell me to the highest bidder: if I die,
-I sell thee to the first; if I go mad,
-I sell thee to the second; if I
-lie, I sell thee to the third; if I slay,
-I sell thee to the fourth: so buy or sell,
-I tell thee again, thou shalt not sell my
-possession.
-
-JULIET:
-And if thou steal, thou shalt not sell thyself.
-
-THEODORE:
-I do not steal; I sell the stolen goods.
-
-THEODORE:
-Thou know'st not what thou sell'st; thou, a woman,
-Thou art ever a victim, a thing of no worth:
-Thou hast no right, no right, but to be sold.
-```
-
-Whoa there, GPT, entering some dark place over there. I didn't really tune the hyperparameters in the config too much, feel free to try!
-
-## sampling / inference
-
-Use the script `sample.py` to sample either from pre-trained GPT-2 models released by OpenAI, or from a model you trained yourself. For example, here is a way to sample from the largest available `gpt2-xl` model:
-
-```
-$ python sample.py \
-    --init_from=gpt2-xl \
-    --start="What is the answer to life, the universe, and everything?" \
-    --num_samples=5 --max_new_tokens=100
-```
-
-If you'd like to sample from a model you trained, use the `--out_dir` to point the code appropriately. You can also prompt the model with some text from a file, e.g. `$ python sample.py --start=FILE:prompt.txt`.
-
-## efficiency notes
-
-For simple model benchmarking and profiling, `bench.py` might be useful. It's identical to what happens in the meat of the training loop of `train.py`, but omits much of the other complexities.
-
-Note that the code by default uses [PyTorch 2.0](https://pytorch.org/get-started/pytorch-2.0/). At the time of writing (Dec 29, 2022) this makes `torch.compile()` available in the nightly release. The improvement from the one line of code is noticeable, e.g. cutting down iteration time from ~250ms / iter to 135ms / iter. Nice work PyTorch team!
-
-## todos
-
-- Investigate and add FSDP instead of DDP
-- Eval zero-shot perplexities on standard evals (e.g. LAMBADA? HELM? etc.)
-- Finetune the finetuning script, I think the hyperparams are not great
-- Schedule for linear batch size increase during training
-- Incorporate other embeddings (rotary, alibi)
-- Separate out the optim buffers from model params in checkpoints I think
-- Additional logging around network health (e.g. gradient clip events, magnitudes)
-- Few more investigations around better init etc.
-
-## troubleshooting
-
-Note that by default this repo uses PyTorch 2.0 (i.e. `torch.compile`). This is fairly new and experimental, and not yet available on all platforms (e.g. Windows). If you're running into related error messages try to disable this by adding `--compile=False` flag. This will slow down the code but at least it will run.
-
-For some context on this repository, GPT, and language modeling it might be helpful to watch my [Zero To Hero series](https://karpathy.ai/zero-to-hero.html). Specifically, the [GPT video](https://www.youtube.com/watch?v=kCc8FmEb1nY) is popular if you have some prior language modeling context.
-
-For more questions/discussions feel free to stop by **#nanoGPT** on Discord:
-
-[![](https://dcbadge.vercel.app/api/server/3zy8kqD9Cp?compact=true&style=flat)](https://discord.gg/3zy8kqD9Cp)
-
-## acknowledgements
-
-All nanoGPT experiments are powered by GPUs on [Lambda labs](https://lambdalabs.com), my favorite Cloud GPU provider. Thank you Lambda labs for sponsoring nanoGPT!
+# Transparent MoE: End-to-end Workflow (Sequence-Level Routing)
+
+This doc summarizes a practical 4-step workflow to explore sequence-level routing in a Mixture-of-Experts GPT, with fast configs that run on a 4GB GPU (e.g., GTX 1050 Ti) and log to Weights & Biases (wandb). Each step includes a small config, exact commands, and what to expect.
+
+All steps use sequence-level routing. For quick demos, we use tiny models and minimal iterations so you can see logging and produce checkpoints rapidly.
+
+## Prerequisites
+- Python env with PyTorch, `transformers`, and wandb. Log in once:
+  ```powershell
+  pip install wandb transformers
+  wandb login
+  ```
+- Datasets:
+  - For quick runs, configs default to `openwebtext` or `shakespeare_char` bins expected at `data/<dataset>/{train,val}.bin`.
+  - For MMLU subject evaluation, prepare per-subject text files (see Step 4) or let the script attempt HF download with `--use_hf`.
+
+## Step 0 — Sanity check (optional)
+Use an ultra-tiny run just to verify the pipeline and wandb logging.
+
+- Config: `config/bp_train_4gb_test_wandb.py` (already present)
+- Command:
+  ```powershell
+  python train.py config/bp_train_4gb_test_wandb.py
+  ```
+- Does: Runs ~10 iterations, logs losses and MoE routing scalars (if MoE enabled) to wandb.
+
+## Step 1 — Benchmark (Baseline model only)
+Goal: Train and evaluate a baseline MoE on OpenWebText. This model is never modified or resumed from; it is used only for comparison.
+
+- 1.1 Train benchmark:
+  - Config: `config/step1_benchmark_moe_4gb.py`
+  - Command:
+    ```powershell
+    python train.py config/step1_benchmark_moe_4gb.py
+    ```
+  - Output:
+    - Checkpoint at `out-step1-benchmark-moe/ckpt.pt`
+    - wandb logs: training curves and per-layer/per-expert routing scalars (layerX/expertY)
+
+- 1.last Evaluate benchmark routing:
+  ```powershell
+  python eval_routing_mmlu.py --ckpt out-step1-benchmark-moe/ckpt.pt --questions_dir data/mmlu_questions --categories global_facts college_biology college_chemistry medical_genetics management --samples_per_category 100 --device cuda --out_dir out-step1-benchmark-moe/routing_analysis --use_hf
+  ```
+
+## Step 2 — Pretrained Model (Strict Expert Specialization)
+Goal: Train each MoE expert on its own subject-specific dataset to encourage specialization, one expert at a time.
+Routing behavior in Step 2: we do NOT learn routing. Each subject run forces all MoE blocks to route to a single designated expert (via `force_expert_idx`), sets the load-balancing auxiliary loss to zero, and freezes non-target experts (and optionally other modules). The larger network does not engage beyond the target expert parameters you choose to train.
+
+1) Quick single-subject demo (config)
+  - Simulates expert specialization by forcing K=1 routing (`n_routed_expert = 1`) on a chosen MMLU subject. This config reads your existing per-subject bins at `data/mmlu/<subject>_train.bin` and `data/mmlu/<subject>_val.bin` via explicit paths.
+
+- Config: `config/step2_pretrain_expert_bio_4gb.py`
+- Set the subject in the config (e.g., `subject = 'college_biology'`).
+- Command:
+  ```powershell
+  python train.py config/step2_pretrain_expert_bio_4gb.py
+  ```
+- Output:
+  - Checkpoint at `out-step2-expert-bio/ckpt.pt`
+  - wandb logs showing specialization (K=1) routing
+
+2.1 Full multi-subject strict pretrain (script)
+  - Sequentially trains experts: for each subject we force routing to one expert, freeze others, export weights.
+  - Example:
+     ```powershell
+      python pretrain.py --data_dir data\mmlu --out_dir out-pretrain \
+        --subjects college_chemistry,global_facts,management,medical_genetics \
+        --iters_per_subject 200 --block_size 128 --batch_size 4 \
+        --n_layer 4 --n_head 4 --n_embd 128 --n_expert 4 --n_routed_expert 1 \
+        --subject_expert_map college_chemistry:0,global_facts:1,management:2,medical_genetics:3 \
+        --freeze_non_target_experts --export_experts
+     ```
+   - Output:
+     - Per-subject snapshots: `out-pretrain/<subject>/ckpt.pt`
+     - Subject end-of-phase snapshots: `out-pretrain/ckpt_<subject>.pt`
+     - Final pretrain snapshot (last subject): `out-pretrain/ckpt.pt`
+     - Per-expert exports: `out-pretrain/experts/expert{idx}_{subject}.pt` containing all layers for that expert
+   - Notes:
+      - `--subject_expert_map` forces a single expert per subject and freezes others (unless overridden), yielding strict expert-specific training.
+      - You can also allow training of non-expert modules with `--train_non_expert_modules`.
+
+Note: True “expert pretrain-and-graft” (copying dense FFN weights into MoE experts) requires a small weight-mapping utility and consistent shapes. This demo focuses on the behavior and logging you can observe quickly.
+
+## Step 2.2 — General Training (Resume on OpenWebText)
+Use standard Top-K routing (e.g. `n_routed_expert = 2`) and allow the router to learn allocation across the pretrained experts.
+Important: Step 1 (Benchmark) is separate and remains untouched. Do not resume from Step 1. Resume only from Step 2 outputs.
+
+Option A — Continue from Step 1 baseline
+- Config: `config/step3_moe_transfer_4gb.py` (points to `out-step1-benchmark-moe`)
+- Command:
+  ```powershell
+  python train.py config/step3_moe_transfer_4gb.py
+  ```
+- Output: continues from `out-step1-benchmark-moe/ckpt.pt`
+
+2.2.1 Resume from strict pretrain:
+- Config: `config/step3_moe_transfer_from_pretrain_4gb.py` (ensure `out_dir = 'out-pretrain'`)
+- Command:
+  ```powershell
+  python train.py config/step3_moe_transfer_from_pretrain_4gb.py
+  ```
+Auto-clean: `train.py` removes any `force_expert_idx` flags so routing works normally.
+
+2.2.2 Optional merge (only if you trained experts separately or want a clean router re-init):
+- Command (merge):
+  ```powershell
+  python post_train.py --config config/step1_benchmark_moe_4gb.py \
+    --experts_dir out-pretrain\experts \
+    --subject_expert_map college_chemistry:0,global_facts:1,management:2,medical_genetics:3 \
+    --out_ckpt out-post-transfer\ckpt.pt
+  ```
+- Command (train on OWT):
+  ```powershell
+  # point `out_dir` in a config to out-post-transfer
+  python train.py config/step3_moe_transfer_4gb.py
+  ```
+
+Optional (advanced): If you do implement expert weight grafting, point the resumed run to a new `out_dir` and load merged weights before continuing.
+
+## Step 2.last — Evaluate Routing for Pretrained Model
+Use `eval_routing_mmlu.py` to collect per-layer expert selection frequencies per subject and produce heatmaps.
+
+- Prepare question files (one per subject) under a directory, e.g. `data/mmlu_questions/`, each named `<category>.txt` with one question per line. Example categories:
+  `global_facts college_biology college_chemistry medical_genetics management`
+  ```powershell
+  python eval_routing_mmlu.py --ckpt out-pretrain/ckpt.pt \
+    --questions_dir data\mmlu_questions \
+    --categories global_facts college_biology college_chemistry medical_genetics management \
+    --samples_per_category 100 --device cuda --out_dir out-pretrain\routing_analysis --use_hf
+  ```
+- Does:
+  - Reconstructs the model from the checkpoint
+  - Runs forward passes to capture `last_selected_experts` per layer
+  - Writes CSV/PNG per category and a summary JSON under the `--out_dir`
+
+## Notes on Routing Logging
+- The training script logs per-layer/per-expert scalars (`layerL/expertE`) and maintains an internal routing history for charting in wandb.
+- Sequence-level routing requires your model to be configured with `n_expert > 0` and `n_routed_expert >= 1`.
+- For stronger specialization pressure, try `n_routed_expert = 1` during subject runs (Step 2).
+
+## Quick Reference: Commands (by step)
+- Strict expert pretrain (sequential):
+  ```powershell
+  python pretrain.py --data_dir data\mmlu --out_dir out-pretrain \
+    --subjects college_chemistry,global_facts,management,medical_genetics \
+    --iters_per_subject 200 --block_size 128 --batch_size 4 \
+    --n_layer 4 --n_head 4 --n_embd 128 --n_expert 4 --n_routed_expert 1 \
+    --subject_expert_map college_chemistry:0,global_facts:1,management:2,medical_genetics:3 \
+    --freeze_non_target_experts --export_experts
+  ```
+- 2.2 Resume general training (from Step 2 only):
+  ```powershell
+  python train.py config/step3_moe_transfer_from_pretrain_4gb.py
+  ```
+- Optional merge then train:
+  ```powershell
+  python post_train.py --config config/step1_benchmark_moe_4gb.py --experts_dir out-pretrain\experts --subject_expert_map college_chemistry:0,global_facts:1,management:2,medical_genetics:3 --out_ckpt out-post-transfer\ckpt.pt
+  python train.py config/step3_moe_transfer_4gb.py
+  ```
+- 2.last Routing evaluation (example):
+  ```powershell
+  python eval_routing_mmlu.py --ckpt out-pretrain/ckpt.pt --questions_dir data\mmlu_questions --categories global_facts college_chemistry management medical_genetics --samples_per_category 100 --device cuda --out_dir out-pretrain\routing_analysis --use_hf
+  ```
+- Specialization eval (ablation + purity for Step 2):
+  ```powershell
+  python eval\eval_specialization.py --ckpt out-pretrain\ckpt.pt --data_dir data\mmlu \
+    --subjects college_chemistry,global_facts,management,medical_genetics \
+    --steps_per_subject 100 --batch_size 4 --device cuda --out_dir eval_results\specialization
+  ```
+
+## Troubleshooting
+- No routing scalars in wandb: ensure your config sets `n_expert > 0`, `n_routed_expert >= 1`, and `wandb_log = True`.
+- Data not found: place `{train,val}.bin` under `data/<dataset>/`. For tiny demos, use `shakespeare_char`.
+- GPU OOM: reduce `batch_size` or `block_size`, or increase `gradient_accumulation_steps`.
+
+---
+This workflow is designed for fast iteration and clear logging. When moving from “demo” to real experiments, increase model size, tokens/iter, and align datasets with your subject bins for more reliable routing effects.

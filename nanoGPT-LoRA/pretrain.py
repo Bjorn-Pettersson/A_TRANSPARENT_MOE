@@ -152,6 +152,16 @@ def main():
     parser.add_argument('--decay_lr', action='store_true')
     parser.add_argument('--compile', action='store_true')
 
+    # Expert specialization (optional strict control)
+    parser.add_argument('--subject_expert_map', type=str, default=None,
+                        help="Mapping like 'college_chemistry:0,global_facts:1,management:2,medical_genetics:3' to force a specific expert per subject.")
+    parser.add_argument('--freeze_non_target_experts', action='store_true',
+                        help='When forcing mapping, freeze all other experts and non-expert modules by default.')
+    parser.add_argument('--train_non_expert_modules', action='store_true',
+                        help='Allow training attention/embeddings/etc. (by default they are frozen when forcing).')
+    parser.add_argument('--export_experts', action='store_true',
+                        help='Export per-expert weights after each subject to out_dir/experts/.')
+
     # System
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
     parser.add_argument('--dtype', type=str, default='bfloat16', choices=['float32','float16','bfloat16'])
@@ -239,7 +249,10 @@ def main():
     model.to(args.device)
 
     # Optimizer
-    optimizer = model.configure_optimizers(args.weight_decay, args.learning_rate, (args.beta1, args.beta2), device_type)
+    def build_optimizer():
+        return model.configure_optimizers(args.weight_decay, args.learning_rate, (args.beta1, args.beta2), device_type)
+
+    optimizer = build_optimizer()
     scaler = torch.cuda.amp.GradScaler(enabled=(args.dtype == 'float16'))
 
     if args.compile:
@@ -275,12 +288,79 @@ def main():
         model.train()
         return float(np.mean(losses)) if losses else float('inf')
 
+    # Parse subject->expert mapping if provided
+    subj2exp = None
+    if args.subject_expert_map:
+        subj2exp = {}
+        for token in args.subject_expert_map.split(','):
+            token = token.strip()
+            if not token:
+                continue
+            if ':' not in token:
+                raise ValueError(f"Invalid token in --subject_expert_map: '{token}'")
+            k, v = token.split(':', 1)
+            subj2exp[k.strip()] = int(v.strip())
+
+    def set_forced_expert(idx: int | None):
+        for blk in model.transformer.h:
+            mlp = getattr(blk, 'mlp', None)
+            if mlp is not None and hasattr(mlp, 'experts'):
+                setattr(mlp, 'force_expert_idx', idx)
+
+    def set_freeze_for_subject(exp_idx: int | None):
+        # default: freeze everything
+        for _, p in model.named_parameters():
+            p.requires_grad = False
+        # unfreeze targeted expert parameters across all layers
+        if exp_idx is not None:
+            for blk in model.transformer.h:
+                mlp = getattr(blk, 'mlp', None)
+                if mlp is None or not hasattr(mlp, 'experts'):
+                    continue
+                expert = mlp.experts[exp_idx]
+                for _, pp in expert.named_parameters():
+                    pp.requires_grad = True
+        # optionally allow non-expert modules to train
+        if args.train_non_expert_modules:
+            for mn, module in model.named_modules():
+                if any(tag in mn for tag in ['attn', 'ln_', 'wte', 'wpe', 'lm_head']):
+                    for _, pp in module.named_parameters(recurse=False):
+                        pp.requires_grad = True
+
+    def export_expert_weights(exp_idx: int, subject: str):
+        if not args.export_experts:
+            return
+        exp_dir = os.path.join(args.out_dir, 'experts')
+        os.makedirs(exp_dir, exist_ok=True)
+        export = {}
+        for li, blk in enumerate(model.transformer.h):
+            mlp = getattr(blk, 'mlp', None)
+            if mlp is None or not hasattr(mlp, 'experts'):
+                continue
+            expert = mlp.experts[exp_idx]
+            export[f'layer_{li}'] = {k: v.detach().cpu() for k, v in expert.state_dict().items()}
+        path = os.path.join(exp_dir, f'expert{exp_idx}_{subject}.pt')
+        torch.save(export, path)
+        print(f"exported expert {exp_idx} weights for subject '{subject}' -> {path}")
+
     # ------------------------- Training Loop -------------------------
     iter_global = 0
     model.train()
     for subj in subject_names:
         ds = subjects[subj]
         print(f"\n=== Pretraining on subject: {subj} ===")
+        # If mapping provided, configure forced routing and freezing
+        target_exp = None
+        if subj2exp is not None:
+            if subj not in subj2exp:
+                raise ValueError(f"Subject '{subj}' not found in --subject_expert_map")
+            target_exp = int(subj2exp[subj])
+            if not (0 <= target_exp < args.n_expert):
+                raise ValueError(f"Expert index {target_exp} out of range [0,{args.n_expert-1}] for subject '{subj}'")
+            set_forced_expert(target_exp)
+            if args.freeze_non_target_experts or not args.train_non_expert_modules:
+                set_freeze_for_subject(target_exp)
+            optimizer = build_optimizer()
         best_val = float('inf')
         t0 = time.time()
         for it in range(args.iters_per_subject):
@@ -344,6 +424,9 @@ def main():
         path = os.path.join(args.out_dir, f'ckpt_{subj}.pt')
         print(f"subject '{subj}' done. saving checkpoint to {path}")
         torch.save(ckpt, path)
+        # export targeted expert after finishing subject phase
+        if target_exp is not None:
+            export_expert_weights(target_exp, subj)
 
     # save a final generic checkpoint for easy resume
     final_path = os.path.join(args.out_dir, 'ckpt.pt')

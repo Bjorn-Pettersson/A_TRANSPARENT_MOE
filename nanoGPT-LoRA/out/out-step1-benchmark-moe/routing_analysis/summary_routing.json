@@ -1,0 +1,126 @@
+{
+  "college_chemistry": {
+    "csv": "out/out-step1-benchmark-moe/routing_analysis\\routing_freq_college_chemistry.csv",
+    "png": "out/out-step1-benchmark-moe/routing_analysis\\routing_heatmap_college_chemistry.png",
+    "json": "out/out-step1-benchmark-moe/routing_analysis\\per_sample_selected_college_chemistry.json",
+    "freqs": [
+      [
+        0.20499999821186066,
+        0.2750000059604645,
+        0.20000000298023224,
+        0.3199999928474426
+      ],
+      [
+        0.35499998927116394,
+        0.42500001192092896,
+        0.09000000357627869,
+        0.12999999523162842
+      ],
+      [
+        0.3400000035762787,
+        0.07500000298023224,
+        0.2849999964237213,
+        0.30000001192092896
+      ],
+      [
+        0.0949999988079071,
+        0.24500000476837158,
+        0.2150000035762787,
+        0.4449999928474426
+      ]
+    ]
+  },
+  "global_facts": {
+    "csv": "out/out-step1-benchmark-moe/routing_analysis\\routing_freq_global_facts.csv",
+    "png": "out/out-step1-benchmark-moe/routing_analysis\\routing_heatmap_global_facts.png",
+    "json": "out/out-step1-benchmark-moe/routing_analysis\\per_sample_selected_global_facts.json",
+    "freqs": [
+      [
+        0.20000000298023224,
+        0.14000000059604645,
+        0.4000000059604645,
+        0.25999999046325684
+      ],
+      [
+        0.3449999988079071,
+        0.3149999976158142,
+        0.15000000596046448,
+        0.1899999976158142
+      ],
+      [
+        0.23000000417232513,
+        0.05000000074505806,
+        0.26499998569488525,
+        0.45500001311302185
+      ],
+      [
+        0.2199999988079071,
+        0.30000001192092896,
+        0.20999999344348907,
+        0.27000001072883606
+      ]
+    ]
+  },
+  "management": {
+    "csv": "out/out-step1-benchmark-moe/routing_analysis\\routing_freq_management.csv",
+    "png": "out/out-step1-benchmark-moe/routing_analysis\\routing_heatmap_management.png",
+    "json": "out/out-step1-benchmark-moe/routing_analysis\\per_sample_selected_management.json",
+    "freqs": [
+      [
+        0.1899999976158142,
+        0.23000000417232513,
+        0.17499999701976776,
+        0.4050000011920929
+      ],
+      [
+        0.33500000834465027,
+        0.38999998569488525,
+        0.10000000149011612,
+        0.17499999701976776
+      ],
+      [
+        0.35499998927116394,
+        0.06499999761581421,
+        0.2750000059604645,
+        0.3050000071525574
+      ],
+      [
+        0.07999999821186066,
+        0.25999999046325684,
+        0.25999999046325684,
+        0.4000000059604645
+      ]
+    ]
+  },
+  "medical_genetics": {
+    "csv": "out/out-step1-benchmark-moe/routing_analysis\\routing_freq_medical_genetics.csv",
+    "png": "out/out-step1-benchmark-moe/routing_analysis\\routing_heatmap_medical_genetics.png",
+    "json": "out/out-step1-benchmark-moe/routing_analysis\\per_sample_selected_medical_genetics.json",
+    "freqs": [
+      [
+        0.20000000298023224,
+        0.27000001072883606,
+        0.17499999701976776,
+        0.35499998927116394
+      ],
+      [
+        0.33500000834465027,
+        0.375,
+        0.11500000208616257,
+        0.17499999701976776
+      ],
+      [
+        0.33000001311302185,
+        0.06499999761581421,
+        0.3100000023841858,
+        0.29499998688697815
+      ],
+      [
+        0.05999999865889549,
+        0.2800000011920929,
+        0.20999999344348907,
+        0.44999998807907104
+      ]
+    ]
+  }
+}

@@ -236,18 +236,37 @@ class SequenceMoE(nn.Module):
     def forward(self, x):
             B, T, C = x.size()  # batch size (B), sequence length (T), embedding dim (C)
 
-            # 1) Sequence-Level Routing: pool over tokens (cheap)
-            sequence_rep = x.mean(dim=1)  # (B, C)
+            # Optional forced expert selection (bypass router). When set, route all sequences
+            # to a single expert with weight 1.0 and set aux loss to zero.
+            forced_idx = getattr(self, 'force_expert_idx', None)
+            if forced_idx is not None:
+                selected_experts = torch.full((B, 1), int(forced_idx), device=x.device, dtype=torch.long)
+                topk_probs = torch.ones((B, 1), device=x.device, dtype=torch.float32)
+                router_probs_full = torch.zeros((B, self.n_expert), device=x.device, dtype=torch.float32)
+            else:
+                # 1) Sequence-Level Routing: pool over tokens (cheap)
+                sequence_rep = x.mean(dim=1)  # (B, C)
 
-            # 2) Router logits in float32 for numerical stability
-            router_logits = self.router(sequence_rep)  # (B, n_expert)
-            # Keep a full softmax for importance/load calculations (float32)
-            router_probs_full = F.softmax(router_logits, dim=-1, dtype=torch.float32)  # (B, n_expert)
+                # 2) Router logits in float32 for numerical stability
+                router_logits = self.router(sequence_rep)  # (B, n_expert)
+                # Optional masking of experts at inference/eval time for ablations.
+                # Set `self.inference_expert_mask` to a 1D mask of shape (n_expert,)
+                # with 1 for allowed experts and 0 for masked experts.
+                mask = getattr(self, 'inference_expert_mask', None)
+                if mask is not None:
+                    if mask.numel() != self.n_expert:
+                        raise ValueError(f"inference_expert_mask length {mask.numel()} != n_expert {self.n_expert}")
+                    allow = (mask.to(router_logits.device) > 0.5)
+                    if not torch.any(allow):
+                        raise ValueError("inference_expert_mask masks out all experts")
+                    router_logits = router_logits.masked_fill(~allow.unsqueeze(0), -1e9)
+                # Keep a full softmax for importance/load calculations (float32)
+                router_probs_full = F.softmax(router_logits, dim=-1, dtype=torch.float32)  # (B, n_expert)
 
-            # 3) Double-softmax Top-K (paper variant): select top-k logits, then softmax
-            #    across only the selected logits to produce the final per-sequence weights.
-            topk_logits, selected_experts = torch.topk(router_logits, self.top_k, dim=-1)  # (B, top_k)
-            topk_probs = F.softmax(topk_logits, dim=-1, dtype=torch.float32)  # (B, top_k)
+                # 3) Double-softmax Top-K (paper variant): select top-k logits, then softmax
+                #    across only the selected logits to produce the final per-sequence weights.
+                topk_logits, selected_experts = torch.topk(router_logits, self.top_k, dim=-1)  # (B, top_k)
+                topk_probs = F.softmax(topk_logits, dim=-1, dtype=torch.float32)  # (B, top_k)
 
             # --- Logging hook: store latest routing decisions for external inspection ---
             # Save routing selections for both training and evaluation so external
@@ -260,6 +279,11 @@ class SequenceMoE(nn.Module):
                 self.last_selected_experts = selected_experts.detach()
             self.last_batch_size = B
             self.last_top_k = self.top_k
+            # also expose the per-sequence weights for evaluating effective assignments
+            try:
+                self.last_topk_probs = topk_probs.detach().cpu()
+            except Exception:
+                self.last_topk_probs = topk_probs.detach()
 
             # weights are the top-k softmax probabilities (already normalized)
             weights = topk_probs.to(x.dtype)
@@ -290,13 +314,19 @@ class SequenceMoE(nn.Module):
                 final_output.index_add_(0, assigned_batch, y_e)
 
             # 5) Load-balancing auxiliary loss using full probabilities (float32)
-            expert_importance = router_probs_full.sum(dim=0) / max(B, 1)
-            device = x.device
-            is_assigned = torch.zeros_like(router_probs_full, dtype=torch.float32, device=device).scatter_(
-                1, selected_experts.long(), 1.0
-            )
-            expert_load = is_assigned.sum(dim=0) / max(B, 1)
-            load_balancing_loss = self.n_expert * torch.sum(expert_importance * expert_load)
+            if forced_idx is not None:
+                load_balancing_loss = torch.zeros(1, device=x.device, dtype=torch.float32)
+            else:
+                expert_importance = router_probs_full.sum(dim=0) / max(B, 1)
+                device = x.device
+                # consider only positive-weight assignments to avoid counting masked picks
+                eps = 1e-12
+                pos = (topk_probs > eps).to(torch.float32)
+                is_assigned = torch.zeros_like(router_probs_full, dtype=torch.float32, device=device).scatter_(
+                    1, selected_experts.long(), pos
+                )
+                expert_load = is_assigned.sum(dim=0) / max(B, 1)
+                load_balancing_loss = self.n_expert * torch.sum(expert_importance * expert_load)
 
             return final_output, load_balancing_loss
 
@@ -415,7 +445,7 @@ class GPT(nn.Module):
         total_aux_loss = torch.zeros(1, device=device)
         
         # We will optionally collect routing stats (per-layer expert frequencies) during training
-        collected_freqs = []
+        collected_freqs = []  # hard frequency: counts / (B * top_k)
         for block in self.transformer.h:
             # Conditional check for MoE: if the block is an MoE, it returns (output, aux_loss)
             if isinstance(block.mlp, SequenceMoE):

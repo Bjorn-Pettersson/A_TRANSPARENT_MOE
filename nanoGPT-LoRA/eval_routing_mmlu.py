@@ -1,15 +1,17 @@
-"""
-Evaluate a trained Sequence-MoE GPT checkpoint on MMLU subject slices
-to collect per-layer expert assignment frequencies per subject.
+"""Evaluate routing specialization with question files (one question per line).
 
-Usage examples:
-  python eval_routing_mmlu.py --ckpt out-moe-test/ckpt.pt \
-    --questions_dir data/mmlu_questions --categories global_facts abstract_algebra medical_genetics management college_biology college_chemistry \
-    --samples_per_category 200 --device cuda --out_dir out-moe-test/routing_analysis
+This version assumes the MMLU question files already exist (no auto-download).
+It produces:
+1. Per-subject heatmaps (layer x expert) identical to original behavior.
+2. Staple-style grouped bar plots (expert activation share per subject) like eval_mmlu.py.
+3. Per-layer CSV matrices with subject rows and expert activation shares.
 
-The script expects one text file per category in `--questions_dir`, named
-`<category>.txt` with one question per line. It will produce CSV and PNG
-heatmaps per category showing layer x expert frequencies.
+Example:
+    python eval_routing_mmlu.py --ckpt out/out-step1-benchmark-moe/ckpt.pt \
+        --questions_dir data/mmlu_questions \
+        --categories college_chemistry global_facts management medical_genetics \
+        --samples_per_category 100 --device cuda --out_dir out/out-step1-benchmark-moe/routing_analysis \
+        --layers_to_plot all
 """
 import os
 import argparse
@@ -33,7 +35,7 @@ except Exception:
 def load_questions_for_category(questions_dir, category):
     path = os.path.join(questions_dir, f"{category}.txt")
     if not os.path.exists(path):
-        raise FileNotFoundError(f"Questions file not found for category '{category}': {path}\nPlease prepare a text file with one question per line.")
+        raise FileNotFoundError(f"Questions file not found for category '{category}': {path}")
     with open(path, 'r', encoding='utf-8') as f:
         lines = [l.strip() for l in f.readlines() if l.strip()]
     return lines
@@ -52,20 +54,50 @@ def plot_heatmap(freqs, outpath, title):
     plt.close()
 
 
+def plot_activation_bars(matrix, subjects, layer_idx, out_path):
+    """Grouped bar plot: experts on x-axis, bars per subject showing activation share."""
+    n_experts = matrix.shape[0]
+    n_subjects = matrix.shape[1]
+    # normalize per subject (column-wise)
+    col_sums = matrix.sum(axis=0, keepdims=True)
+    pct = matrix / (col_sums + 1e-8)
+    plt.figure(figsize=(max(8, n_subjects * 1.2), 6))
+    bar_width = max(0.08, 0.6 / max(n_subjects, 1))
+    experts_idx = np.arange(n_experts)
+    # colors
+    try:
+        import seaborn as sns
+        palette = sns.color_palette("tab10", n_subjects)
+    except Exception:
+        palette = [plt.cm.tab10(i % 10) for i in range(n_subjects)]
+    for s_idx, subject in enumerate(subjects):
+        offset = (s_idx - n_subjects / 2) * bar_width + bar_width / 2
+        plt.bar(experts_idx + offset, pct[:, s_idx], width=bar_width, color=palette[s_idx], label=subject)
+    plt.title(f"Expert Activation Percentages per Subject (Layer {layer_idx})")
+    plt.ylabel("Activation share (0-1)")
+    plt.xlabel("Expert ID")
+    plt.xticks(experts_idx)
+    plt.ylim(0, 1.0)
+    plt.legend(loc="upper center", bbox_to_anchor=(0.5, -0.1), ncol=min(4, n_subjects), frameon=False)
+    plt.tight_layout(rect=(0, 0.05, 1, 1))
+    plt.savefig(out_path, dpi=150)
+    plt.close()
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--ckpt', type=str, default='out-moe-test/ckpt.pt')
     parser.add_argument('--questions_dir', type=str, required=True,
                         help='Directory containing one file per category named <category>.txt')
     parser.add_argument('--categories', nargs='+', required=True,
-                        help='List of categories (filenames without extension) to evaluate')
+                        help='List of subjects/categories (filenames without extension) to evaluate')
     parser.add_argument('--samples_per_category', type=int, default=200)
     parser.add_argument('--device', type=str, default='cuda')
     parser.add_argument('--out_dir', type=str, default='out-moe-test/routing_analysis')
     parser.add_argument('--max_tokens', type=int, default=None,
                         help='If set, crop/pad tokenized inputs to this length (default = model block_size)')
-    parser.add_argument('--use_hf', action='store_true',
-                        help='If set and category files are missing, try to download MMLU via `datasets` to create them')
+    parser.add_argument('--layers_to_plot', type=str, default='all',
+                        help='Comma-separated layer indices for grouped bar plots or "all"')
     args = parser.parse_args()
 
     os.makedirs(args.out_dir, exist_ok=True)
@@ -98,87 +130,16 @@ def main():
     print(f'model: layers={n_layer}, experts={n_expert}, top_k={top_k}, block_size={block_size}')
 
     summary = {}
-    # ensure questions_dir exists
-    os.makedirs(args.questions_dir, exist_ok=True)
-    # If files are missing and user requested, try to populate from HuggingFace datasets
+    # ensure questions_dir exists (no auto-download)
+    if not os.path.isdir(args.questions_dir):
+        raise SystemExit(f"questions_dir does not exist: {args.questions_dir}")
     missing = [cat for cat in args.categories if not os.path.exists(os.path.join(args.questions_dir, f"{cat}.txt"))]
     if missing:
-        print('Missing category files for:', missing)
-        if args.use_hf:
-            try:
-                from datasets import load_dataset
-            except Exception:
-                print('`datasets` not installed. Install with `pip install datasets` or provide local question files.')
-                missing = missing
-            else:
-                # try common dataset ids for MMLU
-                tried = False
-                for ds_id in ['hendrycks/mmlu', 'mmlu']:
-                    try:
-                        print('Trying to load MMLU dataset id:', ds_id)
-                        ds = load_dataset(ds_id)
-                        tried = True
-                        break
-                    except Exception:
-                        ds = None
-                if not tried or ds is None:
-                    print('Could not fetch MMLU from common dataset ids. Please provide local files in', args.questions_dir)
-                else:
-                    # ds may have multiple splits; flatten all examples
-                    examples = []
-                    for split in ds.keys():
-                        for ex in ds[split]:
-                            examples.append(ex)
-                    # heuristically find a text field to use as question
-                    sample_keys = set().union(*(list(e.keys()) for e in examples[:10]))
-                    text_key = None
-                    for k in ('question', 'input', 'query', 'prompt', 'question_text'):
-                        if k in sample_keys:
-                            text_key = k
-                            break
-                    if text_key is None:
-                        # fallback to first string field
-                        for k in sample_keys:
-                            if isinstance(examples[0].get(k), str):
-                                text_key = k
-                                break
-                    if text_key is None:
-                        print('Could not locate a text field in the downloaded dataset; aborting auto-create.')
-                    else:
-                        # group examples by subject if available
-                        subject_key = None
-                        for k in ('subject', 'task', 'category'):
-                            if k in sample_keys:
-                                subject_key = k
-                                break
-                        grouped = {}
-                        if subject_key is not None:
-                            for ex in examples:
-                                subj = ex.get(subject_key, 'unknown')
-                                grouped.setdefault(subj, []).append(ex.get(text_key, ''))
-                        else:
-                            # if no subject, just dump examples into a single generic file per missing category
-                            grouped = {'auto': [ex.get(text_key, '') for ex in examples]}
+        raise SystemExit(f"Missing required subject files: {missing}")
+    # Storage for staple-style aggregation: per layer per expert per subject
+    # subject -> layer -> expert counts
+    aggregate_counts = {cat: [np.zeros((n_expert,), dtype=np.int64) for _ in range(n_layer)] for cat in args.categories}
 
-                        # write files for the missing categories using best-effort mapping by name
-                        for cat in missing:
-                            out_path = os.path.join(args.questions_dir, f"{cat}.txt")
-                            written = 0
-                            # try exact match in subjects
-                            if cat in grouped:
-                                items = grouped[cat]
-                            else:
-                                # pick from 'auto' or sample pool
-                                items = grouped.get('auto', [])
-                            with open(out_path, 'w', encoding='utf-8') as f:
-                                for q in items[:args.samples_per_category]:
-                                    if not q:
-                                        continue
-                                    f.write(q.replace('\n', ' ') + '\n')
-                                    written += 1
-                            print(f'Wrote {written} questions to {out_path}')
-        else:
-            print('Missing category files and --use_hf not set. Please create the files in', args.questions_dir)
     for cat in args.categories:
         print('processing category:', cat)
         questions = load_questions_for_category(args.questions_dir, cat)
@@ -215,7 +176,9 @@ def main():
                     chosen = sel[0].tolist() if sel.ndim == 2 else [int(sel[0])]
                     sample_sel.append(chosen)
                     for e in chosen:
-                        counts[li, int(e)] += 1
+                        e_int = int(e)
+                        counts[li, e_int] += 1
+                        aggregate_counts[cat][li][e_int] += 1
                 else:
                     sample_sel.append(None)
             per_sample_sel.append(sample_sel)
@@ -243,6 +206,46 @@ def main():
             json.dump({'categories': cat, 'samples': len(questions), 'per_sample_selected': per_sample_sel}, f)
 
         summary[cat] = {'csv': csv_path, 'png': png_path, 'json': json_path, 'freqs': freqs.tolist()}
+
+    # Staple-style grouped bar plots & per-layer CSV across subjects
+    layer_list_raw = args.layers_to_plot.strip().lower()
+    if layer_list_raw == 'all':
+        target_layers = list(range(n_layer))
+    else:
+        try:
+            target_layers = [int(x.strip()) for x in layer_list_raw.split(',') if x.strip()]
+        except ValueError:
+            print('[WARN] Invalid --layers_to_plot format; skipping grouped bar plots.')
+            target_layers = []
+
+    subjects = args.categories
+    if target_layers:
+        print(f"Generating grouped bar plots for layers: {target_layers}")
+    for li in target_layers:
+        if li < 0 or li >= n_layer:
+            print(f"[WARN] Layer index {li} out of range; skipping")
+            continue
+        # Build matrix (experts x subjects)
+        mat = np.zeros((n_expert, len(subjects)), dtype=np.float64)
+        for s_idx, subj in enumerate(subjects):
+            counts_vec = aggregate_counts[subj][li]  # (n_expert,)
+            mat[:, s_idx] = counts_vec
+        # Save raw counts matrix
+        raw_path = os.path.join(args.out_dir, f'aggregate_counts_layer{li}.npy')
+        np.save(raw_path, mat)
+        # Save CSV (subject rows, expert columns normalized per subject)
+        col_sums = mat.sum(axis=0, keepdims=True) + 1e-8
+        norm_mat = mat / col_sums
+        csv_path = os.path.join(args.out_dir, f'grouped_activation_layer{li}.csv')
+        with open(csv_path, 'w') as f:
+            f.write('subject,' + ','.join([f'expert_{e}' for e in range(n_expert)]) + '\n')
+            for s_idx, subj in enumerate(subjects):
+                row = ','.join([f"{norm_mat[e, s_idx]:.6f}" for e in range(n_expert)])
+                f.write(f"{subj},{row}\n")
+        # Plot
+        bar_path = os.path.join(args.out_dir, f'expert_activation_bars_layer{li}.png')
+        plot_activation_bars(mat, subjects, li, bar_path)
+        print(f"Saved grouped bar plot and CSV for layer {li}")
 
     # write summary
     with open(os.path.join(args.out_dir, 'summary_routing.json'), 'w') as f:

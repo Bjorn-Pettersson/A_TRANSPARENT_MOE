@@ -1,0 +1,5 @@
+subject,expert_0,expert_1,expert_2,expert_3
+college_chemistry,0.690000,0.020000,0.060000,0.230000
+global_facts,0.310000,0.000000,0.020000,0.670000
+management,0.700000,0.030000,0.130000,0.140000
+medical_genetics,0.800000,0.000000,0.030000,0.170000

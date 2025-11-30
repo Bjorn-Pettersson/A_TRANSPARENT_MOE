@@ -104,6 +104,34 @@ exec(open('configurator.py').read()) # overrides from command line or config fil
 config = {k: globals()[k] for k in config_keys} # will be useful for logging
 # -----------------------------------------------------------------------------
 
+# Resolve final output directory so every run lands under the base 'out' folder.
+# Rules:
+# - Absolute paths in out_dir are respected as-is.
+# - Relative paths that already start with 'out/' are respected.
+# - Other relative paths are nested under 'out/<out_dir>'.
+# - If the result is exactly 'out', append an auto run name based on config file or timestamp.
+_orig_out_dir = out_dir
+try:
+    import sys
+    _cfg_file = globals().get('config_file', None)
+    _cfg_name = None
+    if _cfg_file:
+        _cfg_name = os.path.splitext(os.path.basename(_cfg_file))[0]
+    _stamp = time.strftime('%Y%m%d_%H%M%S')
+
+    if not os.path.isabs(out_dir):
+        norm = out_dir.replace('\\', '/').lstrip('./')
+        if not (norm == 'out' or norm.startswith('out/')):
+            out_dir = os.path.join('out', out_dir)
+        # If still exactly 'out', create a run subfolder name
+        if norm == '' or norm == 'out':
+            run_name = _cfg_name or (wandb_run_name if isinstance(wandb_run_name, str) and len(wandb_run_name) > 0 else None) or f"run_{_stamp}"
+            out_dir = os.path.join('out', run_name)
+    # else: absolute path -> leave unchanged
+except Exception:
+    # Best-effort; if anything goes wrong, fall back to original
+    out_dir = _orig_out_dir
+
 # various inits, derived attributes, I/O setup
 ddp = int(os.environ.get('RANK', -1)) != -1 # is this a ddp run?
 if ddp:
@@ -125,6 +153,7 @@ print("total number of tokens per iteration:", batch_size * block_size * gradien
 try:
     if master_process:
         os.makedirs(out_dir, exist_ok=True)
+        print(f"Output directory: {out_dir}")
     torch.manual_seed(1337 + seed_offset)
     torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
     torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
@@ -134,9 +163,15 @@ try:
     ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
 
     # poor man's data loader
-    data_dir = os.path.join('data', dataset)
-    train_data = np.memmap(os.path.join(data_dir, 'train.bin'), dtype=np.uint16, mode='r')
-    val_data = np.memmap(os.path.join(data_dir, 'val.bin'), dtype=np.uint16, mode='r')
+    # Allow overriding train/val bin paths via config keys `train_bin` and `val_bin`.
+    # Fallback to default layout: data/<dataset>/{train,val}.bin
+    data_dir = os.path.join('data', dataset) if isinstance(dataset, str) else 'data'
+    train_bin_path = globals().get('train_bin', os.path.join(data_dir, 'train.bin'))
+    val_bin_path = globals().get('val_bin', os.path.join(data_dir, 'val.bin'))
+    print(f"loading train bin: {train_bin_path}")
+    print(f"loading val   bin: {val_bin_path}")
+    train_data = np.memmap(train_bin_path, dtype=np.uint16, mode='r')
+    val_data = np.memmap(val_bin_path, dtype=np.uint16, mode='r')
     def get_batch(split):
         data = train_data if split == 'train' else val_data
         ix = torch.randint(len(data) - block_size, (batch_size,))
@@ -215,6 +250,19 @@ try:
         model.load_state_dict(state_dict)
         iter_num = checkpoint.get('iter_num', checkpoint.get('iter_global', 0))
         best_val_loss = checkpoint.get('best_val_loss', 1e9)
+
+        # CLEANUP: remove any forced expert routing attributes so router can learn normally
+        removed = 0
+        for blk in model.transformer.h:
+            mlp = getattr(blk, 'mlp', None)
+            if mlp is not None and hasattr(mlp, 'force_expert_idx'):
+                try:
+                    delattr(mlp, 'force_expert_idx')
+                    removed += 1
+                except Exception:
+                    pass
+        if removed > 0:
+            print(f"[resume] cleared force_expert_idx from {removed} MoE blocks")
 
         if lora_rank > 0:
             # Only make LoRA weights tunable
