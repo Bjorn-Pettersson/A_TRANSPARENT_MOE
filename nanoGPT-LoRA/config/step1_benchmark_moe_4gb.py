@@ -18,7 +18,7 @@ n_routed_expert = 2
 load_balancing_lambda = 0.01
 
 # Data / IO
-out_dir = 'out-step1-benchmark-moe'
+out_dir = 'out/out-step1-benchmark-moe'
 dataset = 'openwebtext'
 block_size = 128
 

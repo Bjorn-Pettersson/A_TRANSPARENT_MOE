@@ -1,0 +1,22 @@
+{
+  "college_chemistry": {
+    "csv": "out/out-step2-pretrain/eval\\routing_freq_college_chemistry.csv",
+    "png": "out/out-step2-pretrain/eval\\routing_heatmap_college_chemistry.png",
+    "json": "out/out-step2-pretrain/eval\\per_sample_selected_college_chemistry.json"
+  },
+  "global_facts": {
+    "csv": "out/out-step2-pretrain/eval\\routing_freq_global_facts.csv",
+    "png": "out/out-step2-pretrain/eval\\routing_heatmap_global_facts.png",
+    "json": "out/out-step2-pretrain/eval\\per_sample_selected_global_facts.json"
+  },
+  "management": {
+    "csv": "out/out-step2-pretrain/eval\\routing_freq_management.csv",
+    "png": "out/out-step2-pretrain/eval\\routing_heatmap_management.png",
+    "json": "out/out-step2-pretrain/eval\\per_sample_selected_management.json"
+  },
+  "medical_genetics": {
+    "csv": "out/out-step2-pretrain/eval\\routing_freq_medical_genetics.csv",
+    "png": "out/out-step2-pretrain/eval\\routing_heatmap_medical_genetics.png",
+    "json": "out/out-step2-pretrain/eval\\per_sample_selected_medical_genetics.json"
+  }
+}

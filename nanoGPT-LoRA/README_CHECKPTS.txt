@@ -20,7 +20,7 @@ python eval.py --ckpt out/out-step1-benchmark-moe/ckpt.pt --questions_dir data/m
 2 Pretrain individual experts 
 python .\pretrain.py --config config/step2_pretrain_4gb.py
 
-3.1 Post train MoE OpenWebtext (start from pretrained experts, not benchmark)
+3.1 Continue OpenWeb Train MoE (start from pretrained experts, not benchmark)
 
 Option A: Merge exported experts, then train (preferred)
 # Ensure experts were exported in Step 2 (directory: out/out-step2-pretrain/experts)

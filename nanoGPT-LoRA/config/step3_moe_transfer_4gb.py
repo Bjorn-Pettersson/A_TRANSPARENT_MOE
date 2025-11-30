@@ -19,8 +19,8 @@ n_routed_expert = 2
 load_balancing_lambda = 0.01
 
 init_from = 'resume'
-# Use a dedicated transfer directory (will be overridden by CLI in README)
-out_dir = 'out-step3-transfer'
+# Use a dedicated transfer directory (aligned with README paths)
+out_dir = 'out/out-step3-transfer'
 
 # Continue training briefly and log
 dataset = 'openwebtext'
