@@ -70,7 +70,7 @@ def try_load_pickled_string_and_tokenize(path):
 
 
 class SubjectDataset:
-    def __init__(self, data_dir, prefix):
+    def __init__(self, data_dir, prefix, vocab_size=50304):
         self.prefix = prefix
         self.train_path = os.path.join(data_dir, f"{prefix}_train.bin")
         self.val_path = os.path.join(data_dir, f"{prefix}_val.bin")
@@ -88,6 +88,31 @@ class SubjectDataset:
         # Infer total token counts
         self.n_train = len(self.train_data)
         self.n_val = len(self.val_data)
+        
+        # Validate token indices are within vocabulary bounds
+        self._validate_tokens(self.train_data, self.train_path, vocab_size)
+        self._validate_tokens(self.val_data, self.val_path, vocab_size)
+    
+    def _validate_tokens(self, data, path, vocab_size):
+        """Check for out-of-bounds token indices that cause CUDA errors."""
+        max_token = int(data.max())
+        min_token = int(data.min())
+        if max_token >= vocab_size or min_token < 0:
+            invalid_mask = (data >= vocab_size) | (data < 0)
+            n_invalid = int(invalid_mask.sum())
+            raise ValueError(
+                f"\n{'='*70}\n"
+                f"INVALID TOKEN INDICES DETECTED\n"
+                f"{'='*70}\n"
+                f"File: {path}\n"
+                f"Token range: [{min_token}, {max_token}]\n"
+                f"Valid range: [0, {vocab_size-1}]\n"
+                f"Invalid tokens: {n_invalid:,} / {len(data):,}\n"
+                f"\nThis will cause CUDA 'index out of bounds' errors during training.\n"
+                f"Please regenerate this .bin file with correct tokenization.\n"
+                f"Use: python scripts/validate_mmlu_data.py --data_dir {os.path.dirname(path)}\n"
+                f"{'='*70}"
+            )
 
     def get_batch(self, split, block_size, batch_size, device, pin_memory=True):
         data = self.train_data if split == 'train' else self.val_data
@@ -220,12 +245,6 @@ def main():
     ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[args.dtype]
     ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
 
-    # Build subject datasets
-    subject_names = [s.strip() for s in args.subjects.split(',') if s.strip()]
-    subjects = {name: SubjectDataset(args.data_dir, name) for name in subject_names}
-    for name, ds in subjects.items():
-        print(f"Subject '{name}': train tokens={ds.n_train:,}, val tokens={ds.n_val:,}")
-
     # Attempt to discover vocab_size from any existing meta.pkl (optional)
     meta_vocab_size = None
     meta_path_candidates = [os.path.join(args.data_dir, 'meta.pkl'), os.path.join('data','openwebtext','meta.pkl')]
@@ -240,6 +259,16 @@ def main():
                     break
             except Exception:
                 pass
+    
+    # Determine final vocab_size before loading datasets (for validation)
+    vocab_size = meta_vocab_size if meta_vocab_size is not None else 50304
+    print(f"Using vocab_size = {vocab_size}")
+
+    # Build subject datasets (will validate token indices)
+    subject_names = [s.strip() for s in args.subjects.split(',') if s.strip()]
+    subjects = {name: SubjectDataset(args.data_dir, name, vocab_size) for name in subject_names}
+    for name, ds in subjects.items():
+        print(f"Subject '{name}': train tokens={ds.n_train:,}, val tokens={ds.n_val:,}")
 
     # Model init args
     model_args = dict(
@@ -248,7 +277,7 @@ def main():
         n_embd=args.n_embd,
         block_size=args.block_size,
         bias=args.bias,
-        vocab_size=meta_vocab_size if meta_vocab_size is not None else 50304,
+        vocab_size=vocab_size,
         dropout=args.dropout,
         ffn_mult=args.ffn_mult,
         n_expert=args.n_expert,

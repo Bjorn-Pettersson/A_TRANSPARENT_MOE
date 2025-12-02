@@ -16,6 +16,17 @@ Configs: s1_16gb_1201A.py, s2_16gb_1201A.py, s3_16gb_1201A.py
 2. MMLU subject-specific data for expert pretraining
    Location: data/mmlu/<subject>_train.bin, data/mmlu/<subject>_val.bin
    Subjects: college_chemistry, global_facts, management, medical_genetics
+   
+   IMPORTANT: The .bin files must be tokenized memmap arrays (np.uint16), 
+   NOT pickled strings. If you get CUDA "index out of bounds" errors during
+   pretraining, your .bin files are corrupted or use the wrong format.
+   
+   To regenerate MMLU binary files with proper tokenization:
+   1. First run the notebook to create CSVs: data/mmlu/bp_prepareMMLUauxAutolabelled.ipynb
+   2. Then convert CSVs to proper .bin format: python data/mmlu/prepare_mmlu_binary.py
+   
+   To validate existing .bin files:
+   python scripts/validate_mmlu_data.py --data_dir data/mmlu
 
 3. MMLU questions for routing evaluation
    Prepare with:
@@ -185,6 +196,18 @@ Expected Timeline (16GB GPU):
 Total: ~5-7 hours
 
 -------------- Troubleshooting ---------------------------
+
+CUDA "index out of bounds" error during pretraining:
+This occurs when .bin files contain invalid token IDs (>= 50304 or < 0).
+The notebook bp_prepareMMLUauxAutolabelled.ipynb saves pickled strings,
+but pretrain.py expects tokenized arrays like OpenWebText.
+
+Fix:
+1. Validate data: python scripts/validate_mmlu_data.py --data_dir data/mmlu
+2. If invalid, regenerate: python data/mmlu/prepare_mmlu_binary.py
+3. The error typically happens ~80 iters into management subject because
+   the on-the-fly tokenization in pretrain.py can produce invalid tokens
+   from corrupted pickled strings.
 
 GPU Out of Memory:
 1. Reduce batch_size to 2, increase gradient_accumulation_steps to 64

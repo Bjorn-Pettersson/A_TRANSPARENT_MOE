@@ -1,0 +1,99 @@
+========================================================================
+FIX FOR CUDA "INDEX OUT OF BOUNDS" ERROR DURING PRETRAINING
+========================================================================
+
+PROBLEM:
+Your autorun workflow crashes during management subject pretraining (~80 iters)
+with CUDA error: "vectorized_gather_kernel: index out of bounds"
+
+ROOT CAUSE:
+The MMLU .bin files were created by bp_prepareMMLUauxAutolabelled.ipynb which
+saves pickled strings, NOT tokenized arrays. When pretrain.py tokenizes these
+strings on-the-fly, it can produce invalid token IDs (>= 50304) that cause
+CUDA to crash.
+
+OpenWebText uses proper tokenization (prepare.py) -> uint16 memmap arrays ✓
+MMLU uses pickled strings (notebook) -> invalid during tokenization ✗
+
+========================================================================
+SOLUTION: REGENERATE MMLU .BIN FILES WITH PROPER TOKENIZATION
+========================================================================
+
+Step 1: Validate your current data
+-----------------------------------
+python scripts/validate_mmlu_data.py --data_dir data/mmlu
+
+This will show which files have out-of-bounds tokens.
+
+Step 2: Regenerate the binary files
+------------------------------------
+# CSVs should already exist from the notebook
+# Run the new tokenization script:
+python data/mmlu/prepare_mmlu_binary.py
+
+This converts the CSVs to properly tokenized .bin files (like OpenWebText).
+
+Step 3: Verify the fix
+-----------------------
+python scripts/validate_mmlu_data.py --data_dir data/mmlu
+
+All files should now show "✓ VALID"
+
+Step 4: Resume your workflow
+-----------------------------
+python autorun_workflow_16gb.py --run_name s1_16gb_1201A --device cuda --skip_benchmark --skip_benchmark_eval
+
+========================================================================
+PREVENTION: UPDATED CODE
+========================================================================
+
+I've made two improvements to prevent this in the future:
+
+1. Created prepare_mmlu_binary.py
+   - Proper tokenization like OpenWebText
+   - Validates token ranges
+   - Located: data/mmlu/prepare_mmlu_binary.py
+
+2. Updated pretrain.py
+   - Now validates token IDs when loading datasets
+   - Will fail early with helpful error message
+   - Tells you to run validate_mmlu_data.py
+
+3. Created validate_mmlu_data.py
+   - Diagnostic tool to check .bin files
+   - Shows token ranges and identifies invalid files
+   - Located: scripts/validate_mmlu_data.py
+
+========================================================================
+WHY THE ERROR HAPPENS AT ~80 ITERS
+========================================================================
+
+- College chemistry, global facts, medical genetics: Work fine (no bad tokens)
+- Management: Has invalid tokens in the data
+- Error occurs ~80 iters in because that's when the model randomly samples
+  a batch containing the invalid token indices
+
+The notebook's pickle.dump(string) approach worked for small experiments but
+doesn't match GPT-2's vocab boundaries for production training.
+
+========================================================================
+TECHNICAL DETAILS
+========================================================================
+
+GPT-2 vocabulary:
+- Original: 50257 tokens
+- Padded (for efficiency): 50304 tokens
+- Valid range: [0, 50303]
+
+The pickled string tokenization can produce tokens >= 50304 when:
+- Special characters are encountered
+- Encoding mismatches occur
+- String concatenation creates invalid sequences
+
+Proper tokenization (like OpenWebText prepare.py):
+1. Encode text with tiktoken
+2. Append EOT token (50256)
+3. Save as np.uint16 memmap
+4. All tokens guaranteed to be in valid range
+
+========================================================================

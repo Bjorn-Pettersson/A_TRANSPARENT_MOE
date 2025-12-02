@@ -1,0 +1,25 @@
+
+===== CMD: python pretrain.py --data_dir data/mmlu --out_dir out/out-s1_16gb_1201A-pretrain --subjects college_chemistry,global_facts,management,medical_genetics --iters_per_subject 600 --block_size 512 --batch_size 4 --gradient_accumulation_steps 16 --n_layer 12 --n_head 12 --n_embd 768 --n_expert 4 --n_routed_expert 1 --subject_expert_map college_chemistry:0,global_facts:1,management:2,medical_genetics:3 --freeze_non_target_experts --export_experts --load_balancing_lambda 0.003 --device cuda --dtype bfloat16 --wandb_log --wandb_run_name s1_16gb_1201A_pretrain --wandb_project moe-understanding =====
+usage: pretrain.py [-h] [--config CONFIG] [--data_dir DATA_DIR]
+                   [--out_dir OUT_DIR] [--subjects SUBJECTS]
+                   [--iters_per_subject ITERS_PER_SUBJECT]
+                   [--eval_interval EVAL_INTERVAL] [--eval_iters EVAL_ITERS]
+                   [--log_interval LOG_INTERVAL]
+                   [--init_from {scratch,resume,gpt2,gpt2-medium,gpt2-large,gpt2-xl}]
+                   [--block_size BLOCK_SIZE] [--batch_size BATCH_SIZE]
+                   [--n_layer N_LAYER] [--n_head N_HEAD] [--n_embd N_EMBD]
+                   [--dropout DROPOUT] [--bias] [--ffn_mult FFN_MULT]
+                   [--n_expert N_EXPERT] [--n_routed_expert N_ROUTED_EXPERT]
+                   [--load_balancing_lambda LOAD_BALANCING_LAMBDA]
+                   [--learning_rate LEARNING_RATE]
+                   [--weight_decay WEIGHT_DECAY] [--beta1 BETA1]
+                   [--beta2 BETA2] [--grad_clip GRAD_CLIP]
+                   [--warmup_iters WARMUP_ITERS] [--min_lr MIN_LR]
+                   [--decay_lr] [--compile]
+                   [--subject_expert_map SUBJECT_EXPERT_MAP]
+                   [--freeze_non_target_experts] [--train_non_expert_modules]
+                   [--export_experts] [--device DEVICE]
+                   [--dtype {float32,float16,bfloat16}] [--seed SEED]
+pretrain.py: error: unrecognized arguments: --gradient_accumulation_steps 16 --wandb_log --wandb_run_name s1_16gb_1201A_pretrain --wandb_project moe-understanding
+
+===== EXIT CODE: 2 =====

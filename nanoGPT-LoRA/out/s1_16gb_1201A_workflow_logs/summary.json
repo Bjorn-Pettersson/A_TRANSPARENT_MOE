@@ -1,0 +1,34 @@
+{
+  "run_name": "s1_16gb_1201A",
+  "subjects": [
+    "college_chemistry",
+    "global_facts",
+    "management",
+    "medical_genetics"
+  ],
+  "benchmark_out_dir": "out/out-s1_16gb_1201A-benchmark",
+  "pretrain_out_dir": "out/out-s1_16gb_1201A-pretrain",
+  "transfer_out_dir": "out/out-s1_16gb_1201A-transfer",
+  "config": {
+    "n_layer": 12,
+    "n_head": 12,
+    "n_embd": 768,
+    "n_expert": 4,
+    "block_size": 512,
+    "load_balancing_lambda": 0.003,
+    "benchmark_iters": 3000,
+    "pretrain_iters_per_subject": 600,
+    "transfer_iters": 2000
+  },
+  "steps": [
+    {
+      "step": "pretrain",
+      "cmd": "python pretrain.py --data_dir data/mmlu --out_dir out/out-s1_16gb_1201A-pretrain --subjects college_chemistry,global_facts,management,medical_genetics --iters_per_subject 600 --block_size 512 --batch_size 4 --gradient_accumulation_steps 16 --n_layer 12 --n_head 12 --n_embd 768 --n_expert 4 --n_routed_expert 1 --subject_expert_map college_chemistry:0,global_facts:1,management:2,medical_genetics:3 --freeze_non_target_experts --export_experts --load_balancing_lambda 0.003 --device cuda --dtype bfloat16 --wandb_log --wandb_run_name s1_16gb_1201A_pretrain --wandb_project moe-understanding",
+      "status": "failed: Command failed (exit 2): python pretrain.py --data_dir data/mmlu --out_dir out/out-s1_16gb_1201A-pretrain --subjects college_chemistry,global_facts,management,medical_genetics --iters_per_subject 600 --block_size 512 --batch_size 4 --gradient_accumulation_steps 16 --n_layer 12 --n_head 12 --n_embd 768 --n_expert 4 --n_routed_expert 1 --subject_expert_map college_chemistry:0,global_facts:1,management:2,medical_genetics:3 --freeze_non_target_experts --export_experts --load_balancing_lambda 0.003 --device cuda --dtype bfloat16 --wandb_log --wandb_run_name s1_16gb_1201A_pretrain --wandb_project moe-understanding",
+      "duration_sec": 6.66
+    }
+  ],
+  "start_time": "2025-12-02 10:50:06",
+  "end_time": "2025-12-02 10:50:12",
+  "total_duration_sec": 6.66
+}
