@@ -12,7 +12,7 @@ Most MoE repos optimize for scale, but are harder to inspect and debug. This wor
 - **Practical training recipes** for both 4GB and 16GB GPU setups
 - **Transparent experimentation** from early concept notes to reproducible scripts
 
-## Highlights (For Recruiters)
+## Highlights
 
 - Built and analyzed a **sequence-level MoE routing pipeline** with explicit expert specialization controls.
 - Implemented an **end-to-end 3-stage training workflow** (benchmark, expert pretrain, transfer) with reproducible runners.
