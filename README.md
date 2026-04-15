@@ -1,6 +1,8 @@
 # A Transparent MoE
 
-Research and engineering workspace for building a transparent Mixture-of-Experts (MoE) language model pipeline with sequence-level routing, expert specialization, and reproducible evaluation on MMLU-style domain splits.
+This repository contains our end of semester reserach project at the course Advanced Deep Learning at Seoul National University 2025. 
+
+Ths is a workspace for creating a Mixture-of-Experts (MoE) language model pipeline with sequence-level routing, expert specialization, and reproducible evaluation on MMLU-style domain splits.
 
 Final project paper: [A transparent MoE for sequence-level routing paper.pdf](A%20transparent%20MoE%20for%20sequence-level%20routing%20paper.pdf)
 
