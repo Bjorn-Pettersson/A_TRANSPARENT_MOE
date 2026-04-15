@@ -1,6 +1,6 @@
 # A Transparent MoE
 
-This repository contains our end of semester reserach project at the course Advanced Deep Learning at Seoul National University 2025. 
+This repository contains our end of semester research project at the course Advanced Deep Learning at Seoul National University 2025. 
 
 Ths is a workspace for creating a Mixture-of-Experts (MoE) language model pipeline with sequence-level routing, expert specialization, and reproducible evaluation on MMLU-style domain splits.
 
