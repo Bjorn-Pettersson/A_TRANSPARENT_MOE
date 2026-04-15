@@ -1,4 +1,0 @@
-[]Look at data
--read train test bin files into pandas and view from openWebText
-
-[]Get MMLUaux data

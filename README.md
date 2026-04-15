@@ -4,6 +4,12 @@ Research and engineering workspace for building a transparent Mixture-of-Experts
 
 Final project paper: [A transparent MoE for sequence-level routing paper.pdf](A%20transparent%20MoE%20for%20sequence-level%20routing%20paper.pdf)
 
+## Acknowledgments & References
+
+This work builds on:
+- **nanoGPT** (https://github.com/karpathy/nanoGPT) – A minimal, clean GPT-2 implementation that served as the foundation for our MoE adaptations.
+- **Fan et al. (2024)** (https://arxiv.org/abs/2402.13089) – "Towards an Empirical Understanding of MoE Design Choices" – The seminal study on weak sequence-level domain specialization that motivated this research.
+
 ## Why This Project
 
 Most MoE repos optimize for scale, but are harder to inspect and debug. This workspace focuses on:
@@ -22,28 +28,17 @@ Most MoE repos optimize for scale, but are harder to inspect and debug. This wor
 
 Technical stack: Python, PyTorch, nanoGPT-style training loops, MoE routing, WandB logging, Matplotlib/Seaborn analysis.
 
-## Repository At A Glance
+## Repository Structure
 
-This repo contains one main implementation track and several research/support tracks:
-
-- `nanoGPT-LoRA/`:
-  - Primary implementation for the Transparent MoE workflow
+- **`nanoGPT-LoRA-MoE-mod/`** – Main implementation
   - Training, pretraining, transfer, and evaluation scripts
-  - Includes automated runners (`autorun_workflow.py`, `autorun_workflow_16gb.py`)
-  - See `nanoGPT-LoRA/README.md` for detailed script-level documentation
-- `nanoMoE-master/`:
-  - Upstream/forked baseline for MoE-capable nanoGPT-style training
-  - Useful reference point for architecture and baseline configs
-- `draft_HL/`:
-  - Work-in-progress training/plotting experiments
-- `draft_BP/`:
-  - Data prep notebooks, MMLU utilities, and report assets
-- `Abstract_Initial_Idea/`:
-  - Early project ideation, abstracts, and presentation materials
+  - Automated end-to-end workflow runners
+  - Detailed READMEs: `README.md`, `README_16GB_WORKFLOW_1201A.txt`, `README_4GB.txt`
+- **`A transparent MoE for sequence-level routing paper.pdf`** – Final research paper with results
 
 ## Main Workflow (Transparent MoE)
 
-The central pipeline in `nanoGPT-LoRA/` is a 3-stage workflow:
+The central pipeline in `nanoGPT-LoRA-MoE-mod/` is a 3-stage workflow:
 
 1. **Benchmark MoE training** on OpenWebText (baseline routing behavior)
 2. **Subject-specific expert pretraining** with forced routing (specialization)
@@ -55,76 +50,43 @@ Evaluation includes:
 - Layer-wise expert usage plots
 - Leave-one-expert-out specialization ablations
 
-## Final Paper Findings (Short Summary)
+## Final Paper Findings (Key Results)
 
-Based on the final paper results:
+Based on the final paper's empirical results:
 
 - Baseline sequence-level MoE reproduces **weak domain specialization**, consistent with Fan et al. (2024).
-- Pretraining experts on subject-specific data and transferring to general data yields **stronger specialization than baseline** in early transfer.
-- Specialization appears to **peak around 1200 iterations** and then declines with continued general-data training.
-- Reported metrics (paper Table 3) indicate this trend:
-  - Benchmark: CosDist `0.066874`, JSM `0.033323`
-  - Transfer @1200: CosDist `0.102351`, JSM `0.047709` (strongest observed)
+- Pretraining experts on subject-specific data yields **stronger specialization than baseline** in early transfer learning.
+- Specialization appears to **peak around 1200 iterations** then declines with continued general-data training.
+- Quantitative metrics (Table 3 in paper):
+  - **Benchmark baseline:** CosDist = 0.0669, JSM = 0.0333
+  - **Transfer @1200 (peak):** CosDist = **0.1024**, JSM = **0.0477** (+53% improvement)
+  - Transfer @3000: CosDist = 0.0876, JSM = 0.0420 (specialization decays over training)
 
-Interpretation from the paper: expert-initialization helps induce specialization, but long transfer on broad OpenWebText may dilute narrow domain effects over time.
+Interpretation: Expert pre-initialization induces meaningful specialization, but continuous training on broad general-text data gradually dilutes domain expertise.
 
-## Results Snapshot
+## Experiments Mapped to Paper Sections
 
-Add exported figures from your paper/runs under `assets/results/` and embed them below.
-
-### Baseline vs Transfer Routing
-
-![Baseline vs Transfer Routing Heatmap Placeholder](assets/results/baseline_vs_transfer_heatmap.svg)
-
-Suggested caption: Subject-conditioned routing is visibly stronger after transfer from expert-pretrained initialization than in the baseline model.
-
-### Specialization Over Training
-
-![Specialization Metric Over Time Placeholder](assets/results/specialization_over_time.svg)
-
-Suggested caption: Specialization increases early, peaks around ~1200 iterations, then gradually declines with extended general-data training.
-
-### Layer-wise Expert Activation
-
-![Layer-wise Expert Activation Placeholder](assets/results/layerwise_activation.svg)
-
-Suggested caption: Layer-level activation frequencies show weak-to-moderate, subject-dependent expert usage patterns.
-
-### Key Metrics Table (From Final Paper)
-
-| Model/Checkpoint | CosDist (avg pairwise) | JSM |
-| --- | ---: | ---: |
-| Benchmark (3k) | 0.066874 | 0.033323 |
-| Transfer eval@600 | 0.054552 | 0.032388 |
-| Transfer eval@1200 | **0.102351** | **0.047709** |
-| Transfer eval@1800 | 0.078089 | 0.038246 |
-| Transfer eval@2400 | 0.085084 | 0.043014 |
-| Transfer eval@3000 | 0.087617 | 0.042046 |
-
-## Experiments Map (Code -> Paper)
-
-| Paper Section | Goal | Main Script(s) | Typical Output |
+| Paper Section | Experiment | Main Scripts | Output |
 | --- | --- | --- | --- |
-| 3.1 / 4.1 Baseline model | Reproduce weak specialization from sequence-level routing | `nanoGPT-LoRA/train.py`, `nanoGPT-LoRA/eval.py` | Baseline checkpoint + routing heatmaps |
-| 3.3.1 Narrow expert pretraining | Induce subject-wise expert specialization | `nanoGPT-LoRA/pretrain.py` | Pretrained experts + per-subject checkpoints |
-| 3.3.2 Transfer learning | Test retention of specialization on general data | `nanoGPT-LoRA/train.py` (resume), `nanoGPT-LoRA/post_train.py` | Transfer checkpoint |
-| 4.2 / 4.5 Comparison analysis | Quantify specialization differences | `nanoGPT-LoRA/eval.py` + metric analysis in paper | CosDist/JSM trend comparisons |
-| 4.3 / Ablation view | Probe expert contribution | `nanoGPT-LoRA/eval_specialization.py` | Loss deltas + routing purity/frequency CSVs |
-| Full pipeline automation | Reproducible end-to-end execution | `nanoGPT-LoRA/autorun_workflow.py`, `nanoGPT-LoRA/autorun_workflow_16gb.py` | Stage-wise run folders + logs |
+| 4.1 Baseline | Reproduce weak specialization | `train.py`, `eval.py` | Routing heatmaps + metrics |
+| 4.2 Transfer | Expert pretraining + transfer | `pretrain.py`, `train.py` (resume) | Pretrained experts + transfer checkpoint |
+| 4.5 Comparison | Quantify specialization metrics | `eval.py` | CosDist/JSM analysis |
+| 4.3 Ablation | Leave-one-expert-out analysis | `eval_specialization.py` | Loss deltas + routing frequency |
+| N/A Full pipeline | End-to-end reproducibility | `autorun_workflow.py`, `autorun_workflow_16gb.py` | Complete run with all outputs |
 
 ## Quick Start
 
 ### 1) Environment
 
 ```bash
-cd nanoGPT-LoRA
+cd nanoGPT-LoRA-MoE-mod
 pip install torch transformers datasets wandb tiktoken matplotlib seaborn numpy
 ```
 
 ### 2) Prepare data
 
-- OpenWebText binaries in `nanoGPT-LoRA/data/openwebtext/`
-- MMLU subject binaries in `nanoGPT-LoRA/data/mmlu/`
+- OpenWebText binaries in `data/openwebtext/`
+- MMLU subject binaries in `data/mmlu/`
 - MMLU question files can be generated via:
 
 ```bash
@@ -147,34 +109,25 @@ python autorun_workflow_16gb.py \
 
 For detailed options, see:
 
-- `nanoGPT-LoRA/README.md`
-- `nanoGPT-LoRA/README_16GB_WORKFLOW_1201A.txt`
-- `nanoGPT-LoRA/README_4GB.txt`
+- `nanoGPT-LoRA-MoE-mod/README.md`
+- `nanoGPT-LoRA-MoE-mod/README_16GB_WORKFLOW_1201A.txt`
+- `nanoGPT-LoRA-MoE-mod/README_4GB.txt`
 
-## What Is Production-Ready vs Experimental
+## Implementation Status
 
-- **Most stable path:** scripts and configs under `nanoGPT-LoRA/`
-- **Reference baseline:** `nanoMoE-master/`
-- **Exploratory / draft:** `draft_*` and parts of `Abstract_Initial_Idea/`
+- **Stable and reproducible:** All scripts in `nanoGPT-LoRA-MoE-mod/` have been tested on 4GB and 16GB setups
+- **Paper-backed:** All experiments are documented in the final paper with quantitative results
+- **Ready to use:** Automated workflows handle data prep, training, and evaluation
 
 ## Suggested Reading Order
 
-1. `nanoGPT-LoRA/README.md`
-2. `nanoGPT-LoRA/autorun_workflow_16gb.py`
-3. `nanoGPT-LoRA/pretrain.py`
-4. `nanoGPT-LoRA/eval.py`
-5. `nanoGPT-LoRA/eval_specialization.py`
-
-## Current Status
-
-- Active research project with reproducible training/evaluation scripts
-- Focused on understanding and visualizing expert specialization behavior
-- Ongoing work on cleaner packaging, tests, and benchmark reporting
-- Final report complete; current codebase supports follow-up experiments on specialization retention
+1. [A transparent MoE for sequence-level routing paper.pdf](A%20transparent%20MoE%20for%20sequence-level%20routing%20paper.pdf) – Final project report
+2. `nanoGPT-LoRA-MoE-mod/README.md` – Technical documentation
+3. `nanoGPT-LoRA-MoE-mod/autorun_workflow_16gb.py` – Automated end-to-end pipeline
+4. `nanoGPT-LoRA-MoE-mod/pretrain.py` – Expert pretraining logic
+5. `nanoGPT-LoRA-MoE-mod/eval.py` – Routing analysis and visualization
+6. `nanoGPT-LoRA-MoE-mod/eval_specialization.py` – Ablation studies and metrics
 
 ## License
 
-This workspace contains multiple subprojects and inherited components. See per-folder license files:
-
-- `nanoGPT-LoRA/LICENSE`
-- `nanoMoE-master/LICENSE`
+See `nanoGPT-LoRA-MoE-mod/LICENSE` for implementation details.

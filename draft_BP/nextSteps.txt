@@ -1,3 +1,0 @@
-
-Building on these baseline results, we aim to optimize the training to make it more similar to the original setting whist still reducing the computational cost in terms of routing behaviors, and thus change the plotting for better visualization. Then we will evaluate the model on our modified MMLU dataset, where our aim is to curate the set for a more concentrated evaluation on selected tasks. After finishing baseline generation, we will then start exploring how task-specific pre-training on experts effects on our training and evaluation.
-

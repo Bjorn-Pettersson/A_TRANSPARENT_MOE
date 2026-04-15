@@ -1,4 +1,0 @@
-Run the whole workflow
-Get the relevant diagrams
-Inspect the code
----------------------
