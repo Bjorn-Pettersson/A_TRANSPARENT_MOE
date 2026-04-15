@@ -2,6 +2,8 @@
 
 Research and engineering workspace for building a transparent Mixture-of-Experts (MoE) language model pipeline with sequence-level routing, expert specialization, and reproducible evaluation on MMLU-style domain splits.
 
+Final project paper: [A transparent MoE for sequence-level routing paper.pdf](A%20transparent%20MoE%20for%20sequence-level%20routing%20paper.pdf)
+
 ## Why This Project
 
 Most MoE repos optimize for scale, but are harder to inspect and debug. This workspace focuses on:
@@ -9,6 +11,16 @@ Most MoE repos optimize for scale, but are harder to inspect and debug. This wor
 - **Interpretability-first MoE workflows** (routing heatmaps, specialization ablations)
 - **Practical training recipes** for both 4GB and 16GB GPU setups
 - **Transparent experimentation** from early concept notes to reproducible scripts
+
+## Highlights (For Recruiters)
+
+- Built and analyzed a **sequence-level MoE routing pipeline** with explicit expert specialization controls.
+- Implemented an **end-to-end 3-stage training workflow** (benchmark, expert pretrain, transfer) with reproducible runners.
+- Added **interpretability-first evaluation tooling** (routing heatmaps, layer-wise expert usage, specialization ablations).
+- Conducted **quantitative specialization analysis** using cosine distance and Jensen-Shannon metrics across training stages.
+- Optimized experiments for **resource-constrained and mid-range hardware** (4GB and 16GB VRAM workflows).
+
+Technical stack: Python, PyTorch, nanoGPT-style training loops, MoE routing, WandB logging, Matplotlib/Seaborn analysis.
 
 ## Repository At A Glance
 
@@ -42,6 +54,63 @@ Evaluation includes:
 - Per-subject routing heatmaps
 - Layer-wise expert usage plots
 - Leave-one-expert-out specialization ablations
+
+## Final Paper Findings (Short Summary)
+
+Based on the final paper results:
+
+- Baseline sequence-level MoE reproduces **weak domain specialization**, consistent with Fan et al. (2024).
+- Pretraining experts on subject-specific data and transferring to general data yields **stronger specialization than baseline** in early transfer.
+- Specialization appears to **peak around 1200 iterations** and then declines with continued general-data training.
+- Reported metrics (paper Table 3) indicate this trend:
+  - Benchmark: CosDist `0.066874`, JSM `0.033323`
+  - Transfer @1200: CosDist `0.102351`, JSM `0.047709` (strongest observed)
+
+Interpretation from the paper: expert-initialization helps induce specialization, but long transfer on broad OpenWebText may dilute narrow domain effects over time.
+
+## Results Snapshot
+
+Add exported figures from your paper/runs under `assets/results/` and embed them below.
+
+### Baseline vs Transfer Routing
+
+![Baseline vs Transfer Routing Heatmap Placeholder](assets/results/baseline_vs_transfer_heatmap.svg)
+
+Suggested caption: Subject-conditioned routing is visibly stronger after transfer from expert-pretrained initialization than in the baseline model.
+
+### Specialization Over Training
+
+![Specialization Metric Over Time Placeholder](assets/results/specialization_over_time.svg)
+
+Suggested caption: Specialization increases early, peaks around ~1200 iterations, then gradually declines with extended general-data training.
+
+### Layer-wise Expert Activation
+
+![Layer-wise Expert Activation Placeholder](assets/results/layerwise_activation.svg)
+
+Suggested caption: Layer-level activation frequencies show weak-to-moderate, subject-dependent expert usage patterns.
+
+### Key Metrics Table (From Final Paper)
+
+| Model/Checkpoint | CosDist (avg pairwise) | JSM |
+| --- | ---: | ---: |
+| Benchmark (3k) | 0.066874 | 0.033323 |
+| Transfer eval@600 | 0.054552 | 0.032388 |
+| Transfer eval@1200 | **0.102351** | **0.047709** |
+| Transfer eval@1800 | 0.078089 | 0.038246 |
+| Transfer eval@2400 | 0.085084 | 0.043014 |
+| Transfer eval@3000 | 0.087617 | 0.042046 |
+
+## Experiments Map (Code -> Paper)
+
+| Paper Section | Goal | Main Script(s) | Typical Output |
+| --- | --- | --- | --- |
+| 3.1 / 4.1 Baseline model | Reproduce weak specialization from sequence-level routing | `nanoGPT-LoRA/train.py`, `nanoGPT-LoRA/eval.py` | Baseline checkpoint + routing heatmaps |
+| 3.3.1 Narrow expert pretraining | Induce subject-wise expert specialization | `nanoGPT-LoRA/pretrain.py` | Pretrained experts + per-subject checkpoints |
+| 3.3.2 Transfer learning | Test retention of specialization on general data | `nanoGPT-LoRA/train.py` (resume), `nanoGPT-LoRA/post_train.py` | Transfer checkpoint |
+| 4.2 / 4.5 Comparison analysis | Quantify specialization differences | `nanoGPT-LoRA/eval.py` + metric analysis in paper | CosDist/JSM trend comparisons |
+| 4.3 / Ablation view | Probe expert contribution | `nanoGPT-LoRA/eval_specialization.py` | Loss deltas + routing purity/frequency CSVs |
+| Full pipeline automation | Reproducible end-to-end execution | `nanoGPT-LoRA/autorun_workflow.py`, `nanoGPT-LoRA/autorun_workflow_16gb.py` | Stage-wise run folders + logs |
 
 ## Quick Start
 
@@ -101,6 +170,7 @@ For detailed options, see:
 - Active research project with reproducible training/evaluation scripts
 - Focused on understanding and visualizing expert specialization behavior
 - Ongoing work on cleaner packaging, tests, and benchmark reporting
+- Final report complete; current codebase supports follow-up experiments on specialization retention
 
 ## License
 
